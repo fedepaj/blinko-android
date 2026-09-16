@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="#000000" android:padding="8dp">
+    <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2" />
+    <TextView android:id="@+id/stats" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#CCCCCC" android:typeface="monospace" android:textSize="11sp" android:paddingTop="6dp" />
+    <com.federicopaglioni.rslog.ProfileView android:id="@+id/profile" android:layout_width="match_parent" android:layout_height="90dp" />
+    <TextView android:id="@+id/last" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#FFFFFF" android:typeface="monospace" android:textSize="14sp" android:paddingTop="4dp" />
+    <ScrollView android:id="@+id/scroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:textColor="#9CDF9C" android:typeface="monospace" android:textSize="12sp" />
+    </ScrollView>
+</LinearLayout>
