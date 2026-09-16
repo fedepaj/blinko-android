@@ -7,3 +7,4 @@ app/.cxx/
 .idea/
 *.iml
 .DS_Store
+build.log
