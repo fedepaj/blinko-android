@@ -26,7 +26,7 @@ class MarkerView(context: Context, attrs: AttributeSet?) : View(context, attrs) 
             val vx = (1f - y) * w; val vy = x * h; val vr = r * h
             ring.color = palette[(maxOf(id, 1) - 1) % palette.size]
             c.drawCircle(vx, vy, maxOf(vr, 24f), ring)
-            val label = "#$id ${if (mode == 1) "RGB" else "mono"} ${pk}p"
+            val label = "#$id ${when (mode) { 1 -> "RGB"; 2 -> "direct"; else -> "mono" }} ${pk}p"
             val tw = text.measureText(label)
             c.drawRect(vx - tw / 2 - 6, vy + vr + 6, vx + tw / 2 + 6, vy + vr + 40, bg)
             text.color = ring.color
