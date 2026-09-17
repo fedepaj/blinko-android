@@ -30,8 +30,8 @@ Java_com_federicopaglioni_rslog_RsCore_reset(JNIEnv *env, jclass cls)
     rs_multi_init(g_multi);
 }
 
-/* Multi-source path on an RGBA_8888 frame. tracksOut receives up to len/7 entries of
- * (id, cx/w, cy/h, radius/w, mode, packets, messages); returns the number of tracks
+/* Multi-source path on an RGBA_8888 frame. tracksOut receives up to len/8 entries of
+ * (id, cx/w, cy/h, radius/w, mode, packets, messages, group); returns the number of tracks
  * (or -1 when no light was found, so the caller can use the single path). Packets decoded
  * are stored in stats[11]. Messages are queued with their track id (pollMessage). */
 static rs_message_t g_mq[16]; static int g_mq_track[16]; static int g_mq_len;
@@ -48,13 +48,13 @@ Java_com_federicopaglioni_rslog_RsCore_processFrameRgbaMulti(JNIEnv *env, jclass
     if (count == 0) return -1;
     if (packetsOut) { jint v = n; (*env)->SetIntArrayRegion(env, packetsOut, 0, 1, &v); }
     if (tracksOut) {
-        jsize m = (*env)->GetArrayLength(env, tracksOut) / 7;
-        jfloat tmp[7 * RS_MAX_TRACKS]; int k = 0;
+        jsize m = (*env)->GetArrayLength(env, tracksOut) / 8;
+        jfloat tmp[8 * RS_MAX_TRACKS]; int k = 0;
         for (int i = 0; i < count && i < m; i++) {
             int id, mode, pilots; float cx, cy, rad; uint32_t pk, ms;
             if (!rs_multi_track_info(g_multi, i, &id, &cx, &cy, &rad, &mode, &pk, &ms, &pilots)) break;
             tmp[k++] = (float)id; tmp[k++] = cx / (float)w; tmp[k++] = cy / (float)h; tmp[k++] = rad / (float)w;
-            tmp[k++] = (float)mode; tmp[k++] = (float)pk; tmp[k++] = (float)ms;
+            tmp[k++] = (float)mode; tmp[k++] = (float)pk; tmp[k++] = (float)ms; tmp[k++] = (float)rs_multi_track_group(g_multi, i);
         }
         if (k) (*env)->SetFloatArrayRegion(env, tracksOut, 0, k, tmp);
     }

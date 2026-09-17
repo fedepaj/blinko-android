@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraInfo = ""
     @Volatile private var axis = 0   // 0 rows, 1 columns (tap the profile to toggle)
     private var useRgba = false
-    private val trackBuf = FloatArray(7 * 4)
+    private val trackBuf = FloatArray(8 * 4)
     private val pktBuf = IntArray(1)
     @Volatile private var lastTracks = FloatArray(0)
     private var lastTrackCount = 0
@@ -181,7 +181,7 @@ class MainActivity : AppCompatActivity() {
             // multi-source first (every light gets its own receiver); single-ROI path when no light is segmented
             val tc = RsCore.processFrameRgbaMulti(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, t, trackBuf, pktBuf)
             if (tc > 0) {
-                lastTrackCount = tc; lastTracks = trackBuf.copyOf(tc * 7)
+                lastTrackCount = tc; lastTracks = trackBuf.copyOf(tc * 8)
                 RsCore.processFrameRgba(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, axis, t, stats, profile, null)   // stats/profile for the UI
                 pktBuf[0]
             } else {
