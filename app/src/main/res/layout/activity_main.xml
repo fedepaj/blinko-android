@@ -11,8 +11,11 @@
     <com.federicopaglioni.rslog.ProfileView android:id="@+id/profile" android:layout_width="match_parent" android:layout_height="90dp" />
     <TextView android:id="@+id/last" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:textColor="#FFFFFF" android:typeface="monospace" android:textSize="14sp" android:paddingTop="4dp" />
-    <ScrollView android:id="@+id/scroll" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
-        <TextView android:id="@+id/log" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textColor="#9CDF9C" android:typeface="monospace" android:textSize="12sp" />
-    </ScrollView>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="4dp">
+        <Button android:id="@+id/sourceBtn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="All sources ▾" android:textAllCaps="false" style="?android:attr/borderlessButtonStyle" android:textColor="#9CDF9C" />
+        <Button android:id="@+id/clearBtn" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Clear" android:textAllCaps="false" style="?android:attr/borderlessButtonStyle" android:textColor="#FF7070" />
+    </LinearLayout>
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/console" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
 </LinearLayout>

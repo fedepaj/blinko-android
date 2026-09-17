@@ -19,7 +19,7 @@ import android.util.Size
 import android.view.Surface
 import android.view.TextureView
 import android.view.WindowManager
-import android.widget.ScrollView
+import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -37,8 +37,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var preview: TextureView
     private lateinit var statsView: TextView
     private lateinit var lastView: TextView
-    private lateinit var logView: TextView
-    private lateinit var scroll: ScrollView
+    private lateinit var consoleView: androidx.recyclerview.widget.RecyclerView
+    private lateinit var sourceBtn: Button
+    private lateinit var console: Console
+    private lateinit var adapter: MessageAdapter
     private lateinit var profileView: ProfileView
     private lateinit var markers: MarkerView
 
@@ -69,11 +71,35 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         preview = findViewById(R.id.preview); statsView = findViewById(R.id.stats)
-        lastView = findViewById(R.id.last); logView = findViewById(R.id.log)
-        scroll = findViewById(R.id.scroll); profileView = findViewById(R.id.profile); markers = findViewById(R.id.markers)
+        lastView = findViewById(R.id.last)
+        profileView = findViewById(R.id.profile); markers = findViewById(R.id.markers)
+        console = Console(this); adapter = MessageAdapter(console)
+        consoleView = findViewById(R.id.console)
+        consoleView.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
+        consoleView.adapter = adapter
+        console.onChanged = { adapter.refresh(); sourceBtn.text = console.label(console.filter) + " ▾" }
+        // swipe a row away to delete that message
+        androidx.recyclerview.widget.ItemTouchHelper(object : androidx.recyclerview.widget.ItemTouchHelper.SimpleCallback(0, androidx.recyclerview.widget.ItemTouchHelper.LEFT or androidx.recyclerview.widget.ItemTouchHelper.RIGHT) {
+            override fun onMove(rv: androidx.recyclerview.widget.RecyclerView, a: androidx.recyclerview.widget.RecyclerView.ViewHolder, b: androidx.recyclerview.widget.RecyclerView.ViewHolder) = false
+            override fun onSwiped(vh: androidx.recyclerview.widget.RecyclerView.ViewHolder, dir: Int) { console.remove(adapter.items[vh.bindingAdapterPosition]) }
+        }).attachToRecyclerView(consoleView)
+        sourceBtn = findViewById(R.id.sourceBtn)
+        sourceBtn.setOnClickListener {
+            val src = console.sources()
+            val labels = arrayOf("All sources") + src.map { it.second }.toTypedArray()
+            val ids = intArrayOf(0) + src.map { it.first }.toIntArray()
+            android.app.AlertDialog.Builder(this).setTitle("Show messages from")
+                .setSingleChoiceItems(labels, ids.indexOf(console.filter).coerceAtLeast(0)) { d, which -> console.filter = ids[which]; console.onChanged?.invoke(); d.dismiss() }
+                .setNegativeButton("Cancel", null).show()
+        }
+        findViewById<Button>(R.id.clearBtn).setOnClickListener {
+            android.app.AlertDialog.Builder(this).setMessage("Delete all ${console.messages.size} messages?")
+                .setPositiveButton("Delete") { _, _ -> console.clear(); RsCore.reset() }.setNegativeButton("Cancel", null).show()
+        }
+        console.onChanged?.invoke()
         lastView.text = "Point the camera at the LED, 1–3 cm away"
         profileView.setOnClickListener { axis = 1 - axis; RsCore.reset(); lastView.text = "scan axis: " + if (axis == 0) "rows" else "columns" }
-        profileView.setOnLongClickListener { RsCore.reset(); logView.text = ""; lastView.text = "reset"; true }
+        profileView.setOnLongClickListener { RsCore.reset(); lastView.text = "receiver reset"; true }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 1)
         }
@@ -211,9 +237,9 @@ class MainActivity : AppCompatActivity() {
                     val parts = m.split("|")
                     val level = parts[1].toIntOrNull() ?: 7
                     val src = parts.getOrNull(3)?.toIntOrNull() ?: 0
-                    val line = "${fmt.format(Date())} [${RsCore.levelNames[level.coerceIn(0, 7)]}]" + (if (src > 0) " src#$src" else "") + " slot${parts[0]} ${parts[2]}"
-                    lastView.text = line
-                    logView.append(line + "\n"); scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+                    val msg = LogMsg(System.currentTimeMillis(), parts[0].toIntOrNull() ?: 0, level, parts[2], src)
+                    lastView.text = "[${msg.levelName}]" + (if (src > 0) " src#$src" else "") + " ${msg.text}"
+                    console.add(msg)
                     val vib = getSystemService(VIBRATOR_SERVICE) as Vibrator
                     vib.vibrate(VibrationEffect.createOneShot(if (level == 6 || level == 4) 300 else 40, VibrationEffect.DEFAULT_AMPLITUDE))
                 }
