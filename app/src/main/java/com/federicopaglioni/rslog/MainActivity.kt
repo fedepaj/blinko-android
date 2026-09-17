@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logView: TextView
     private lateinit var scroll: ScrollView
     private lateinit var profileView: ProfileView
+    private lateinit var markers: MarkerView
 
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
@@ -57,6 +58,10 @@ class MainActivity : AppCompatActivity() {
     private var cameraInfo = ""
     @Volatile private var axis = 0   // 0 rows, 1 columns (tap the profile to toggle)
     private var useRgba = false
+    private val trackBuf = FloatArray(7 * 4)
+    private val pktBuf = IntArray(1)
+    @Volatile private var lastTracks = FloatArray(0)
+    private var lastTrackCount = 0
     private val fmt = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,7 +70,7 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         preview = findViewById(R.id.preview); statsView = findViewById(R.id.stats)
         lastView = findViewById(R.id.last); logView = findViewById(R.id.log)
-        scroll = findViewById(R.id.scroll); profileView = findViewById(R.id.profile)
+        scroll = findViewById(R.id.scroll); profileView = findViewById(R.id.profile); markers = findViewById(R.id.markers)
         lastView.text = "Point the camera at the LED, 1–3 cm away"
         profileView.setOnClickListener { axis = 1 - axis; RsCore.reset(); lastView.text = "scan axis: " + if (axis == 0) "rows" else "columns" }
         profileView.setOnLongClickListener { RsCore.reset(); logView.text = ""; lastView.text = "reset"; true }
@@ -173,7 +178,16 @@ class MainActivity : AppCompatActivity() {
         val t = (System.nanoTime() / 1e9).toFloat()
         val n = if (useRgba) {
             val p = img.planes[0]
-            RsCore.processFrameRgba(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, axis, t, stats, profile, packets)
+            // multi-source first (every light gets its own receiver); single-ROI path when no light is segmented
+            val tc = RsCore.processFrameRgbaMulti(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, t, trackBuf, pktBuf)
+            if (tc > 0) {
+                lastTrackCount = tc; lastTracks = trackBuf.copyOf(tc * 7)
+                RsCore.processFrameRgba(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, axis, t, stats, profile, null)   // stats/profile for the UI
+                pktBuf[0]
+            } else {
+                lastTrackCount = 0
+                RsCore.processFrameRgba(p.buffer, p.rowStride, p.pixelStride, img.width, img.height, axis, t, stats, profile, packets)
+            }
         } else {
             val py = img.planes[0]; val pu = img.planes[1]; val pv = img.planes[2]
             RsCore.processFrame(py.buffer, py.rowStride, py.pixelStride, pu.buffer, pu.rowStride, pu.pixelStride, pv.buffer, pv.rowStride, pv.pixelStride,
@@ -192,10 +206,12 @@ class MainActivity : AppCompatActivity() {
                 statsView.text = String.format(Locale.US, "%s\nfps %d  pkt/s %.1f  rows/chip %.1f  contrast %.0f  syncs %.0f  crcfail %.0f  roi %.0f-%.0f  msgs %.0f  axis %s\nmode %s  pilots %.0f  cond %.2f  peak %.0f  iso %d",
                     cameraInfo, fps, pps, st[3], st[2], st[0], st[1], st[4], st[5], st[7], if (axis == 0) "rows" else "cols",
                     if (st[8] > 0.5f) "RGB" else "luma", st[9], st[10], st[12], isoNow)
+                markers.tracks = lastTracks; markers.count = lastTrackCount; markers.invalidate()
                 for (m in messages) {
-                    val parts = m.split("|", limit = 3)
+                    val parts = m.split("|")
                     val level = parts[1].toIntOrNull() ?: 7
-                    val line = "${fmt.format(Date())} [${RsCore.levelNames[level.coerceIn(0, 7)]}] slot${parts[0]} ${parts[2]}"
+                    val src = parts.getOrNull(3)?.toIntOrNull() ?: 0
+                    val line = "${fmt.format(Date())} [${RsCore.levelNames[level.coerceIn(0, 7)]}]" + (if (src > 0) " src#$src" else "") + " slot${parts[0]} ${parts[2]}"
                     lastView.text = line
                     logView.append(line + "\n"); scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
                     val vib = getSystemService(VIBRATOR_SERVICE) as Vibrator

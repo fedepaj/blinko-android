@@ -7,8 +7,10 @@
 #include <android/log.h>
 #include "rs_rx.h"
 #include "rs_frame.h"
+#include "rs_multi.h"
 
 static rs_rx_t *g_rx;
+static rs_multi_t *g_multi;
 static float g_r[4096], g_g[4096], g_b[4096];
 
 static void ensure_init(void)
@@ -16,6 +18,8 @@ static void ensure_init(void)
     if (g_rx) return;
     g_rx = (rs_rx_t *)malloc(rs_rx_sizeof());
     rs_rx_init(g_rx);
+    g_multi = (rs_multi_t *)malloc(rs_multi_sizeof());
+    rs_multi_init(g_multi);
 }
 
 JNIEXPORT void JNICALL
@@ -23,6 +27,40 @@ Java_com_federicopaglioni_rslog_RsCore_reset(JNIEnv *env, jclass cls)
 {
     ensure_init();
     rs_rx_init(g_rx);
+    rs_multi_init(g_multi);
+}
+
+/* Multi-source path on an RGBA_8888 frame. tracksOut receives up to len/7 entries of
+ * (id, cx/w, cy/h, radius/w, mode, packets, messages); returns the number of tracks
+ * (or -1 when no light was found, so the caller can use the single path). Packets decoded
+ * are stored in stats[11]. Messages are queued with their track id (pollMessage). */
+static rs_message_t g_mq[16]; static int g_mq_track[16]; static int g_mq_len;
+
+JNIEXPORT jint JNICALL
+Java_com_federicopaglioni_rslog_RsCore_processFrameRgbaMulti(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint pixelStride,
+        jint w, jint h, jfloat t, jfloatArray tracksOut, jintArray packetsOut)
+{
+    ensure_init();
+    const uint8_t *px = (const uint8_t *)(*env)->GetDirectBufferAddress(env, buf);
+    if (!px || w <= 0 || h <= 0) return -1;
+    int n = rs_multi_process(g_multi, px, w, h, rowStride, pixelStride, 0, 1, 2, t);
+    int count = rs_multi_track_count(g_multi);
+    if (count == 0) return -1;
+    if (packetsOut) { jint v = n; (*env)->SetIntArrayRegion(env, packetsOut, 0, 1, &v); }
+    if (tracksOut) {
+        jsize m = (*env)->GetArrayLength(env, tracksOut) / 7;
+        jfloat tmp[7 * RS_MAX_TRACKS]; int k = 0;
+        for (int i = 0; i < count && i < m; i++) {
+            int id, mode, pilots; float cx, cy, rad; uint32_t pk, ms;
+            if (!rs_multi_track_info(g_multi, i, &id, &cx, &cy, &rad, &mode, &pk, &ms, &pilots)) break;
+            tmp[k++] = (float)id; tmp[k++] = cx / (float)w; tmp[k++] = cy / (float)h; tmp[k++] = rad / (float)w;
+            tmp[k++] = (float)mode; tmp[k++] = (float)pk; tmp[k++] = (float)ms;
+        }
+        if (k) (*env)->SetFloatArrayRegion(env, tracksOut, 0, k, tmp);
+    }
+    rs_message_t msg; int tid;
+    while (g_mq_len < 16 && rs_multi_pop_message(g_multi, &msg, &tid)) { g_mq[g_mq_len] = msg; g_mq_track[g_mq_len] = tid; g_mq_len++; }
+    return count;
 }
 
 /* stats[0..11]: syncs, crc_fail, contrast, rows_per_chip, roi_start, roi_end, profile_count,
@@ -130,10 +168,16 @@ JNIEXPORT jstring JNICALL
 Java_com_federicopaglioni_rslog_RsCore_pollMessage(JNIEnv *env, jclass cls)
 {
     ensure_init();
-    rs_message_t m;
-    if (!rs_rx_pop_message(g_rx, &m)) return NULL;
-    char buf[96];
-    snprintf(buf, sizeof(buf), "%d|%d|%s", m.id, m.level, m.text);
+    rs_message_t m; int tid = 0;
+    if (g_mq_len > 0) {
+        m = g_mq[0]; tid = g_mq_track[0];
+        for (int i = 1; i < g_mq_len; i++) { g_mq[i - 1] = g_mq[i]; g_mq_track[i - 1] = g_mq_track[i]; }
+        g_mq_len--;
+    } else if (!rs_rx_pop_message(g_rx, &m)) {
+        return NULL;
+    }
+    char buf[112];
+    snprintf(buf, sizeof(buf), "%d|%d|%s|%d", m.id, m.level, m.text, tid);
     return (*env)->NewStringUTF(env, buf);
 }
 

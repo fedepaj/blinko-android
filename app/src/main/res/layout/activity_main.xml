@@ -2,7 +2,10 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical" android:background="#000000" android:padding="8dp">
-    <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2" />
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2">
+        <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.federicopaglioni.rslog.MarkerView android:id="@+id/markers" android:layout_width="match_parent" android:layout_height="match_parent" />
+    </FrameLayout>
     <TextView android:id="@+id/stats" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:textColor="#CCCCCC" android:typeface="monospace" android:textSize="11sp" android:paddingTop="6dp" />
     <com.federicopaglioni.rslog.ProfileView android:id="@+id/profile" android:layout_width="match_parent" android:layout_height="90dp" />
