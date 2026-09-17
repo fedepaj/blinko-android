@@ -1,10 +1,10 @@
-package com.federicopaglioni.rslog
+package com.federicopaglioni.blinko
 
 import java.nio.ByteBuffer
 
 /** Bridge to the shared C core (core/): profile extraction, decoder, assembler. */
 object RsCore {
-    init { System.loadLibrary("rslog") }
+    init { System.loadLibrary("blinko") }
 
     external fun reset()
     /** Returns packets decoded in this frame; fills stats[12], profile (downsampled luma), packets (start,end,slot,channel)*n.

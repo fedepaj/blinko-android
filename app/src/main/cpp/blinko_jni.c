@@ -23,7 +23,7 @@ static void ensure_init(void)
 }
 
 JNIEXPORT void JNICALL
-Java_com_federicopaglioni_rslog_RsCore_reset(JNIEnv *env, jclass cls)
+Java_com_federicopaglioni_blinko_RsCore_reset(JNIEnv *env, jclass cls)
 {
     ensure_init();
     rs_rx_init(g_rx);
@@ -37,7 +37,7 @@ Java_com_federicopaglioni_rslog_RsCore_reset(JNIEnv *env, jclass cls)
 static rs_message_t g_mq[16]; static int g_mq_track[16]; static int g_mq_len;
 
 JNIEXPORT jint JNICALL
-Java_com_federicopaglioni_rslog_RsCore_processFrameRgbaMulti(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint pixelStride,
+Java_com_federicopaglioni_blinko_RsCore_processFrameRgbaMulti(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint pixelStride,
         jint w, jint h, jfloat t, jfloatArray tracksOut, jintArray packetsOut)
 {
     ensure_init();
@@ -66,7 +66,7 @@ Java_com_federicopaglioni_rslog_RsCore_processFrameRgbaMulti(JNIEnv *env, jclass
 /* stats[0..11]: syncs, crc_fail, contrast, rows_per_chip, roi_start, roi_end, profile_count,
  * messages_total, mode (0 luma / 1 rgb), pilots, cal_cond, packets_total. */
 JNIEXPORT jint JNICALL
-Java_com_federicopaglioni_rslog_RsCore_processFrame(JNIEnv *env, jclass cls,
+Java_com_federicopaglioni_blinko_RsCore_processFrame(JNIEnv *env, jclass cls,
         jobject ybuf, jint yRs, jint yPs, jobject ubuf, jint uRs, jint uPs, jobject vbuf, jint vRs, jint vPs,
         jint w, jint h, jint axis, jfloat t,
         jfloatArray statsOut, jfloatArray profileOut, jfloatArray packetsOut)
@@ -121,7 +121,7 @@ Java_com_federicopaglioni_rslog_RsCore_processFrame(JNIEnv *env, jclass cls,
 
 /* RGBA_8888 frame (full-resolution colour): same outputs as processFrame. */
 JNIEXPORT jint JNICALL
-Java_com_federicopaglioni_rslog_RsCore_processFrameRgba(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint pixelStride,
+Java_com_federicopaglioni_blinko_RsCore_processFrameRgba(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint pixelStride,
         jint w, jint h, jint axis, jfloat t, jfloatArray statsOut, jfloatArray profileOut, jfloatArray packetsOut)
 {
     ensure_init();
@@ -165,7 +165,7 @@ Java_com_federicopaglioni_rslog_RsCore_processFrameRgba(JNIEnv *env, jclass cls,
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_federicopaglioni_rslog_RsCore_pollMessage(JNIEnv *env, jclass cls)
+Java_com_federicopaglioni_blinko_RsCore_pollMessage(JNIEnv *env, jclass cls)
 {
     ensure_init();
     rs_message_t m; int tid = 0;
@@ -182,7 +182,7 @@ Java_com_federicopaglioni_rslog_RsCore_pollMessage(JNIEnv *env, jclass cls)
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_federicopaglioni_rslog_RsCore_slotProgress(JNIEnv *env, jclass cls, jint slot)
+Java_com_federicopaglioni_blinko_RsCore_slotProgress(JNIEnv *env, jclass cls, jint slot)
 {
     ensure_init();
     return rs_asm_progress(&g_rx->assembler, (uint8_t)slot);

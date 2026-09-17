@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.federicopaglioni.rslog"
+    namespace = "com.federicopaglioni.blinko"
     compileSdk = 36
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.federicopaglioni.rslog"
+        applicationId = "com.federicopaglioni.blinko"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

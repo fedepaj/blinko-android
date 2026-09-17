@@ -4,5 +4,5 @@ pluginManagement {
 dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
-rootProject.name = "RSLogViewer"
+rootProject.name = "Blinko"
 include(":app")

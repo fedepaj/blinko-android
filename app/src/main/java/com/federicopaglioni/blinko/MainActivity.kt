@@ -1,4 +1,4 @@
-package com.federicopaglioni.rslog
+package com.federicopaglioni.blinko
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -30,7 +30,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * Minimal RSLog viewer: back camera, manual exposure at the sensor minimum, focus at
+ * Minimal Blinko viewer: back camera, manual exposure at the sensor minimum, focus at
  * infinity (near LED defocused), YUV 1080p at the highest frame rate, luma plane -> C core.
  */
 class MainActivity : AppCompatActivity() {
@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
-    private val thread = HandlerThread("rslog.camera").apply { start() }
+    private val thread = HandlerThread("blinko.camera").apply { start() }
     private val handler = Handler(thread.looper)
     private val stats = FloatArray(14)
     private var reqBuilder: CaptureRequest.Builder? = null

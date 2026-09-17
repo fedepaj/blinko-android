@@ -1,7 +1,7 @@
 # Android
 
-**Stato**: app minima funzionante in `android/RSLogViewer` (Kotlin, Camera2,
-core C via NDK/JNI), APK di debug in `build/RSLog-android-debug.apk`
+**Stato**: app minima funzionante in `android/Blinko` (Kotlin, Camera2,
+core C via NDK/JNI), APK di debug in `build/Blinko-android-debug.apk`
 (`make android`). Non ancora provata su un telefono reale (nessun Android
 collegato al Mac durante lo sviluppo).
 
@@ -24,7 +24,7 @@ JNI. Cambia solo il guscio (camera + UI).
 
 ```
 app/
-  src/main/cpp/          CMakeLists.txt → libcore (core/*.c) + rslog_jni.cpp
+  src/main/cpp/          CMakeLists.txt → libcore (core/*.c) + blinko_jni.cpp
   src/main/java/.../
     CameraController.kt  Camera2: formato YUV_420_888 1080p, esposizione manuale
     FrameProcessor.kt    piano Y → ROI → profilo per riga (RenderScript no; loop Kotlin/NDK)

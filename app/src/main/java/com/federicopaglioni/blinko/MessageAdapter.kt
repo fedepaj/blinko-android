@@ -1,4 +1,4 @@
-package com.federicopaglioni.rslog
+package com.federicopaglioni.blinko
 
 import android.graphics.Color
 import android.graphics.Typeface
