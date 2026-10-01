@@ -51,7 +51,7 @@ data class CameraInfo(
  */
 class CameraController(private val ctx: Context) {
     private val mgr = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-    private val thread = HandlerThread("blinko.camera").apply { start() }
+    private val thread = HandlerThread("blinko.camera", android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }   // frames are decoded on this thread
     val handler = Handler(thread.looper)
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null

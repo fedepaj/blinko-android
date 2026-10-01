@@ -14,6 +14,27 @@ static rs_multi_t *g_multi;
 static float g_r[4096], g_g[4096], g_b[4096];
 static int g_last_n = 0;     /* rows of the last RAW profiles (lastProfiles) */
 
+/* The receiver's parallel hook: the channels of a frame on three threads. The phone's three
+ * 3000-row RAW profiles took 15-25 ms one after the other, and under that load the governor kept
+ * the big cores at a third of their clock; two short-lived pthreads per frame plus the caller
+ * cut the wall time to about a third. The decoder's scratch is thread-local (RS_DEC_THREADS). */
+#include <pthread.h>
+typedef struct { void (*job)(void *, int); void *ctx; int i; } par_arg_t;
+static void *par_run(void *a) { par_arg_t *p = (par_arg_t *)a; p->job(p->ctx, p->i); return NULL; }
+static void parallel_for(void *user, int count, void (*job)(void *ctx, int i), void *ctx)
+{
+    (void)user;
+    pthread_t th[8]; par_arg_t arg[8]; int started = 0;
+    if (count > 8) count = 8;
+    for (int i = 1; i < count; i++) {
+        arg[i].job = job; arg[i].ctx = ctx; arg[i].i = i;
+        if (pthread_create(&th[i], NULL, par_run, &arg[i]) == 0) started |= 1 << i; else job(ctx, i);
+    }
+    job(ctx, 0);
+    for (int i = 1; i < count; i++) if (started & (1 << i)) pthread_join(th[i], NULL);
+}
+static void set_hooks(void) { g_rx->parallel = parallel_for; rs_multi_set_parallel(g_multi, parallel_for, NULL); }
+
 static void ensure_init(void)
 {
     if (g_rx) return;
@@ -21,6 +42,7 @@ static void ensure_init(void)
     rs_rx_init(g_rx);
     g_multi = (rs_multi_t *)malloc(rs_multi_sizeof());
     rs_multi_init(g_multi);
+    set_hooks();
 }
 
 JNIEXPORT void JNICALL
@@ -29,6 +51,7 @@ Java_com_federicopaglioni_blinko_RsCore_reset(JNIEnv *env, jclass cls)
     ensure_init();
     rs_rx_init(g_rx);
     rs_multi_init(g_multi);
+    set_hooks();
 }
 
 /* Multi-source path on an RGBA_8888 frame. tracksOut receives up to len/8 entries of

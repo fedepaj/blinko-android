@@ -91,7 +91,10 @@ below the board's T. **RAW capture** reads the Bayer mosaic itself: per-row
 R/G/B profiles from the 2×2 blocks under the LED, clipped blocks dropped, the
 green profile from the Gr rows only (Gr and Gb differ under a narrow-band
 LED), rows averaged in pairs before the receiver (a 3000-row frame would cost
-three times a 1080p one). Use it when the YUV path shows a peak that never
+three times a 1080p one), the three channels decoded on three threads. The
+activity asks for sustained-performance mode and decodes on a high-priority
+camera thread: the governor otherwise idles the big cores under this bursty
+load and the frame rate swings. Use it when the YUV path shows a peak that never
 reaches 255 while nothing decodes: the ISP compresses highlights and hides the
 saturation. **Strobe calibration** (Lab) measures the row time per resolution:
 send `strobe 2000` to the board, enable the mode, read the row time on the

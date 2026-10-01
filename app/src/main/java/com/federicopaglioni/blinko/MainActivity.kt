@@ -70,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.setSustainedPerformanceMode(true)   // steadier CPU clocks for the per-frame decode (the governor otherwise idles the big cores under this bursty load)
         // edge-to-edge: keep the tabs' content below the status bar (the bottom bar handles its own inset)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.content)) { v, insets -> v.setPadding(0, insets.getInsets(WindowInsetsCompat.Type.statusBars()).top, 0, 0); insets }
         session = Session(this)
