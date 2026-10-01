@@ -19,21 +19,29 @@ static int g_last_n = 0;     /* rows of the last RAW profiles (lastProfiles) */
  * the big cores at a third of their clock; two short-lived pthreads per frame plus the caller
  * cut the wall time to about a third. The decoder's scratch is thread-local (RS_DEC_THREADS). */
 #include <pthread.h>
-typedef struct { void (*job)(void *, int); void *ctx; int i; } par_arg_t;
-static void *par_run(void *a) { par_arg_t *p = (par_arg_t *)a; p->job(p->ctx, p->i); return NULL; }
+#include <stdatomic.h>
+#include <unistd.h>
+/* Any number of jobs over a few short-lived workers (the caller is one of them): the jobs are
+ * pulled from a shared counter, so a frame's 3 channels or a profile's ~10-24 sync candidates
+ * both fit; nested calls (a candidate map inside a channel map) just make more workers. */
+typedef struct { void (*job)(void *, int); void *ctx; int count; atomic_int next; } par_t;
+static void *par_run(void *a)
+{
+    par_t *p = (par_t *)a;
+    for (;;) { int i = atomic_fetch_add(&p->next, 1); if (i >= p->count) return NULL; p->job(p->ctx, i); }
+}
 static void parallel_for(void *user, int count, void (*job)(void *ctx, int i), void *ctx)
 {
     (void)user;
-    pthread_t th[8]; par_arg_t arg[8]; int started = 0;
-    if (count > 8) count = 8;
-    for (int i = 1; i < count; i++) {
-        arg[i].job = job; arg[i].ctx = ctx; arg[i].i = i;
-        if (pthread_create(&th[i], NULL, par_run, &arg[i]) == 0) started |= 1 << i; else job(ctx, i);
-    }
-    job(ctx, 0);
-    for (int i = 1; i < count; i++) if (started & (1 << i)) pthread_join(th[i], NULL);
+    par_t p; p.job = job; p.ctx = ctx; p.count = count; atomic_init(&p.next, 0);
+    static int ncpu = 0; if (!ncpu) { ncpu = (int)sysconf(_SC_NPROCESSORS_ONLN); if (ncpu < 2) ncpu = 2; if (ncpu > 8) ncpu = 8; }
+    int workers = count < ncpu ? count : ncpu;
+    pthread_t th[8]; int started = 0;
+    for (int w = 1; w < workers; w++) if (pthread_create(&th[w], NULL, par_run, &p) == 0) started |= 1 << w;
+    par_run(&p);
+    for (int w = 1; w < workers; w++) if (started & (1 << w)) pthread_join(th[w], NULL);
 }
-static void set_hooks(void) { g_rx->parallel = parallel_for; rs_multi_set_parallel(g_multi, parallel_for, NULL); }
+static void set_hooks(void) { rs_rx_set_parallel(g_rx, parallel_for, NULL); rs_multi_set_parallel(g_multi, parallel_for, NULL); }
 
 static void ensure_init(void)
 {
