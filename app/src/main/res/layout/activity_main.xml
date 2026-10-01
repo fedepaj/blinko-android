@@ -1,21 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:background="#000000" android:padding="8dp">
-    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1.2">
-        <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="match_parent" />
-        <com.federicopaglioni.blinko.MarkerView android:id="@+id/markers" android:layout_width="match_parent" android:layout_height="match_parent" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#000000">
+    <FrameLayout android:id="@+id/content" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <FrameLayout android:id="@+id/live" android:layout_width="match_parent" android:layout_height="match_parent"><include layout="@layout/tab_live" /></FrameLayout>
+        <FrameLayout android:id="@+id/consoleTab" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone"><include layout="@layout/tab_console" /></FrameLayout>
+        <ScrollView android:id="@+id/lab" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone" android:fillViewport="true">
+            <LinearLayout android:id="@+id/labBox" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp" />
+        </ScrollView>
+        <ScrollView android:id="@+id/settings" android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone" android:fillViewport="true">
+            <LinearLayout android:id="@+id/settingsBox" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp" />
+        </ScrollView>
     </FrameLayout>
-    <TextView android:id="@+id/stats" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:textColor="#CCCCCC" android:typeface="monospace" android:textSize="11sp" android:paddingTop="6dp" />
-    <com.federicopaglioni.blinko.ProfileView android:id="@+id/profile" android:layout_width="match_parent" android:layout_height="90dp" />
-    <TextView android:id="@+id/last" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:textColor="#FFFFFF" android:typeface="monospace" android:textSize="14sp" android:paddingTop="4dp" />
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:paddingTop="4dp">
-        <Button android:id="@+id/sourceBtn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-            android:text="All sources ▾" android:textAllCaps="false" style="?android:attr/borderlessButtonStyle" android:textColor="#9CDF9C" />
-        <Button android:id="@+id/clearBtn" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Clear" android:textAllCaps="false" style="?android:attr/borderlessButtonStyle" android:textColor="#FF7070" />
-    </LinearLayout>
-    <androidx.recyclerview.widget.RecyclerView android:id="@+id/console" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+    <com.google.android.material.bottomnavigation.BottomNavigationView android:id="@+id/nav" android:layout_width="match_parent" android:layout_height="wrap_content"
+        app:menu="@menu/bottom_nav" app:labelVisibilityMode="labeled" android:background="#121212" />
 </LinearLayout>

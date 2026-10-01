@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp">
+    <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:background="#000000">
+        <TextureView android:id="@+id/preview" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <com.federicopaglioni.blinko.MarkerView android:id="@+id/markers" android:layout_width="match_parent" android:layout_height="match_parent" />
+        <HorizontalScrollView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="8dp" android:scrollbars="none">
+            <LinearLayout android:id="@+id/statsBar" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal"
+                android:background="@drawable/capsule" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="5dp" android:paddingBottom="5dp" />
+        </HorizontalScrollView>
+        <TextView android:id="@+id/holdStill" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="12dp" android:background="@drawable/capsule_red" android:paddingLeft="14dp" android:paddingRight="14dp" android:paddingTop="6dp" android:paddingBottom="6dp"
+            android:text="✋ Hold still" android:textColor="#FFFFFF" android:textStyle="bold" android:visibility="gone" />
+        <TextView android:id="@+id/cameraError" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center"
+            android:background="@drawable/capsule" android:padding="8dp" android:textColor="#FF7070" android:visibility="gone" />
+    </FrameLayout>
+    <com.federicopaglioni.blinko.ProfileView android:id="@+id/profile" android:layout_width="match_parent" android:layout_height="110dp" android:layout_marginTop="6dp" android:background="@drawable/panel" />
+    <LinearLayout android:id="@+id/recordRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:visibility="gone">
+        <Button android:id="@+id/recBtn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="⏺ Record 2 s" android:textAllCaps="false"
+            style="?attr/materialButtonOutlinedStyle" android:textColor="#FF5252" />
+        <EditText android:id="@+id/noteField" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:hint="note (board, motion…)"
+            android:textSize="12sp" android:inputType="text" android:imeOptions="actionDone" android:layout_marginLeft="8dp" />
+    </LinearLayout>
+    <TextView android:id="@+id/lastRecording" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#9E9E9E" android:textSize="11sp" android:visibility="gone" />
+    <TextView android:id="@+id/last" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="4dp" android:paddingLeft="4dp"
+        android:textColor="#9E9E9E" android:typeface="monospace" android:textSize="12sp" android:maxLines="2" android:ellipsize="end" />
+</LinearLayout>

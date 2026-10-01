@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Blinko" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#9CDF9C</item>
+        <item name="colorOnPrimary">#0B2A0B</item>
+        <item name="colorSecondary">#FFD060</item>
+        <item name="colorSurface">#121212</item>
+        <item name="colorSurfaceContainer">#1C1C1C</item>
+        <item name="android:colorBackground">#000000</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#121212</item>
+    </style>
+</resources>
