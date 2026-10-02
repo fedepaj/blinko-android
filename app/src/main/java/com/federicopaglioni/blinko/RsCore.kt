@@ -37,6 +37,8 @@ object RsCore {
     external fun setMinContrast(v: Float)
     /** Camera exposure in sensor rows (exposure µs / row µs); 0 = unknown. */
     external fun setExposureRows(rows: Float)
+    /** Sensor row time in seconds (stitching of repeated packets across frames); 0 = unknown. */
+    external fun setRowTime(seconds: Float)
     /** "slot|level|text|track" or null. */
     external fun pollMessage(): String?
     external fun slotProgress(slot: Int): Float

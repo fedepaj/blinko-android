@@ -57,7 +57,7 @@ class Session(private val ctx: Context) {
         camera.onInfo = { i -> main.post { pipeline.rawCfa = i.cfa; pipeline.rawBlack = i.blackLevel; pipeline.rawWhite = i.whiteLevel
             val e = if (i.actualExposureUs > 0) i.actualExposureUs else i.exposureUs
             val rowUs = settings.rowUs   /* the HAL's rolling-shutter skew is not trustworthy here (28 ms reported, 8.5 ms measured): the strobe calibration rules */
-            RsCore.setExposureRows(if (e > 0) (e / rowUs).toFloat() else 0f); onCameraInfo?.invoke(i) } }
+            RsCore.setExposureRows(if (e > 0) (e / rowUs).toFloat() else 0f); RsCore.setRowTime((rowUs * 1e-6).toFloat()); onCameraInfo?.invoke(i) } }
         camera.onError = { e -> main.post { Diag.warn("[camera] $e"); onStatus?.invoke(e) } }
         camera.onFrame = { img, t -> pipeline.process(img, t) }
         remote.onCommand = { cmd, reply, replyFile -> main.post { handleRemote(cmd, reply, replyFile) } }

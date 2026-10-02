@@ -287,6 +287,7 @@ Java_com_federicopaglioni_blinko_RsCore_convertRgbaToBgra(JNIEnv *env, jclass cl
 static uint8_t g_rawsel[4096];
 static float g_r2[2048], g_g2[2048], g_b2[2048];   /* pair-averaged RAW profiles */
 static float g_exposure_rows = 0;                   /* as set by the app, in full-resolution rows */
+static float g_row_seconds = 0;                     /* sensor row time, full resolution */
 JNIEXPORT jint JNICALL
 Java_com_federicopaglioni_blinko_RsCore_processFrameRaw(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint w, jint h,
         jint cfa, jint black, jint white, jfloat t, jfloatArray statsOut, jfloatArray profileOut, jfloatArray packetsOut)
@@ -350,6 +351,7 @@ Java_com_federicopaglioni_blinko_RsCore_processFrameRaw(JNIEnv *env, jclass cls,
         for (int r = 0; r < hd; r++) { g_r2[r] = 0.5f * (g_r[2 * r] + g_r[2 * r + 1]); g_g2[r] = 0.5f * (g_g[2 * r] + g_g[2 * r + 1]); g_b2[r] = 0.5f * (g_b[2 * r] + g_b[2 * r + 1]); }
     }
     g_rx->cfg.exposure_rows = g_exposure_rows / (float)ds;
+    rs_rx_set_row_time(g_rx, g_row_seconds * (float)ds);                /* the stitcher predicts phases from frame times */
     int n = rs_rx_process(g_rx, ds == 2 ? g_r2 : g_r, ds == 2 ? g_g2 : g_g, ds == 2 ? g_b2 : g_b, hd, t);
     const rs_dec_stats_t *st = rs_rx_stats(g_rx);
     if (statsOut) {
@@ -406,6 +408,15 @@ Java_com_federicopaglioni_blinko_RsCore_setMinContrast(JNIEnv *env, jclass cls, 
 }
 
 /* Camera exposure in sensor rows (exposure_us / row_us) for the exposure-aware detector; 0 = unknown. */
+JNIEXPORT void JNICALL
+Java_com_federicopaglioni_blinko_RsCore_setRowTime(JNIEnv *env, jclass cls, jfloat seconds)
+{
+    ensure_init();
+    g_row_seconds = seconds;
+    rs_rx_set_row_time(g_rx, seconds);
+    rs_multi_set_row_time(g_multi, seconds);
+}
+
 JNIEXPORT void JNICALL
 Java_com_federicopaglioni_blinko_RsCore_setExposureRows(JNIEnv *env, jclass cls, jfloat rows)
 {
