@@ -388,8 +388,7 @@ Java_com_federicopaglioni_blinko_RsCore_processFrameRaw(JNIEnv *env, jclass cls,
     if (ds == 2) {
         for (int r = 0; r < hd; r++) { g_r2[r] = 0.5f * (g_r[2 * r] + g_r[2 * r + 1]); g_g2[r] = 0.5f * (g_g[2 * r] + g_g[2 * r + 1]); g_b2[r] = 0.5f * (g_b[2 * r] + g_b[2 * r + 1]); }
     }
-    g_rx->cfg.exposure_rows = g_exposure_rows / (float)ds;
-    rs_rx_set_row_time(g_rx, g_row_seconds * (float)ds);                /* the stitcher predicts phases from frame times */
+    { rs_camera_t cam = { g_exposure_rows / (float)ds, g_row_seconds * (float)ds }; rs_rx_set_camera(g_rx, cam); }
     int n = rs_rx_process(g_rx, ds == 2 ? g_r2 : g_r, ds == 2 ? g_g2 : g_g, ds == 2 ? g_b2 : g_b, hd, t);
     const rs_dec_stats_t *st = rs_rx_stats(g_rx);
     if (statsOut) {
@@ -451,8 +450,7 @@ Java_com_federicopaglioni_blinko_RsCore_setRowTime(JNIEnv *env, jclass cls, jflo
 {
     ensure_init();
     g_row_seconds = seconds;
-    rs_rx_set_row_time(g_rx, seconds);
-    rs_multi_set_row_time(g_multi, seconds);
+    rs_camera_t cam = { g_exposure_rows, g_row_seconds }; rs_rx_set_camera(g_rx, cam); rs_multi_set_camera(g_multi, cam);
 }
 
 JNIEXPORT void JNICALL
@@ -460,8 +458,7 @@ Java_com_federicopaglioni_blinko_RsCore_setExposureRows(JNIEnv *env, jclass cls,
 {
     ensure_init();
     g_exposure_rows = rows;
-    g_rx->cfg.exposure_rows = rows;
-    rs_multi_set_exposure_rows(g_multi, rows);
+    rs_camera_t cam = { g_exposure_rows, g_row_seconds }; rs_rx_set_camera(g_rx, cam); rs_multi_set_camera(g_multi, cam);
 }
 
 JNIEXPORT jstring JNICALL
