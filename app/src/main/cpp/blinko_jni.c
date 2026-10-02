@@ -133,11 +133,11 @@ Java_com_federicopaglioni_blinko_RsCore_processFrame(JNIEnv *env, jclass cls,
     }
     const rs_dec_stats_t *st = rs_rx_stats(g_rx);
     if (statsOut) {
-        jfloat s[14] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx),
+        jfloat s[15] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx),
                          (float)fi.roi_start, (float)fi.roi_end, (float)fi.count, (float)rs_rx_messages(g_rx),
                          (float)rs_rx_mode(g_rx), (float)rs_rx_pilots(g_rx), rs_rx_cal_cond(g_rx), (float)rs_rx_packets(g_rx),
-                         (float)fi.peak, fi.sat_frac };
-        (*env)->SetFloatArrayRegion(env, statsOut, 0, 14, s);
+                         (float)fi.peak, fi.sat_frac, (float)rs_rx_stitched(g_rx) };
+        (*env)->SetFloatArrayRegion(env, statsOut, 0, 15, s);
     }
     if (profileOut) {
         jsize m = (*env)->GetArrayLength(env, profileOut);
@@ -178,11 +178,11 @@ static jint rgb_process(JNIEnv *env, jobject buf, jint rowStride, jint pixelStri
     int n = rs_rx_process(g_rx, g_r, g_g, g_b, fi.count, t);
     const rs_dec_stats_t *st = rs_rx_stats(g_rx);
     if (statsOut) {
-        jfloat s[14] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx),
+        jfloat s[15] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx),
                          (float)fi.roi_start, (float)fi.roi_end, (float)fi.count, (float)rs_rx_messages(g_rx),
                          (float)rs_rx_mode(g_rx), (float)rs_rx_pilots(g_rx), rs_rx_cal_cond(g_rx), (float)rs_rx_packets(g_rx),
-                         (float)fi.peak, fi.sat_frac };
-        (*env)->SetFloatArrayRegion(env, statsOut, 0, 14, s);
+                         (float)fi.peak, fi.sat_frac, (float)rs_rx_stitched(g_rx) };
+        (*env)->SetFloatArrayRegion(env, statsOut, 0, 15, s);
     }
     if (profileOut) {
         jsize m = (*env)->GetArrayLength(env, profileOut);
@@ -277,6 +277,41 @@ Java_com_federicopaglioni_blinko_RsCore_convertRgbaToBgra(JNIEnv *env, jclass cl
     return ow;
 }
 
+/* RAW_SENSOR frame -> packed BGRA at half resolution: one pixel per 2x2 Bayer block (R, (Gr+Gb)/2,
+ * B scaled 0..255 by the black and white levels, clipping at 255 so the receiver sees it), with
+ * the block columns subsampled by `step`. The result goes through the same segmentation /
+ * multi-source / profile path as a YUV frame, which keeps every light apart; rows are 2 sensor
+ * rows, so the row time to use is twice the sensor's. Returns the output width. */
+JNIEXPORT jint JNICALL
+Java_com_federicopaglioni_blinko_RsCore_convertRawToBgra(JNIEnv *env, jclass cls, jobject buf, jint rowStride, jint w, jint h,
+        jint cfa, jint black, jint white, jint step, jobject outBuf)
+{
+    const uint8_t *px = (const uint8_t *)(*env)->GetDirectBufferAddress(env, buf);
+    uint8_t *o = (uint8_t *)(*env)->GetDirectBufferAddress(env, outBuf);
+    if (!px || !o || w < 4 || h < 4 || step < 1) return 0;
+    int bw = w / 2, bh = h / 2, ow = bw / step;
+    jlong cap = (*env)->GetDirectBufferCapacity(env, outBuf);
+    if (cap < (jlong)ow * bh * 4) return 0;
+    if (white <= black) white = black + 1;
+    float scale = 255.0f / (float)(white - black);
+    /* cfa: 0 RGGB, 1 GRBG, 2 GBRG, 3 BGGR -> positions of R and B inside the 2x2 block */
+    int r_row = (cfa == 2 || cfa == 3) ? 1 : 0, r_col = (cfa == 1 || cfa == 3) ? 1 : 0;
+    for (int by = 0; by < bh; by++) {
+        const uint16_t *row0 = (const uint16_t *)(px + (size_t)(2 * by) * rowStride), *row1 = (const uint16_t *)(px + (size_t)(2 * by + 1) * rowStride);
+        uint8_t *d = o + (size_t)by * ow * 4;
+        for (int bx = 0; bx < ow; bx++, d += 4) {
+            int x = 2 * bx * step;
+            int p00 = row0[x], p01 = row0[x + 1], p10 = row1[x], p11 = row1[x + 1];
+            int r = r_row == 0 ? (r_col == 0 ? p00 : p01) : (r_col == 0 ? p10 : p11);
+            int b = r_row == 0 ? (r_col == 0 ? p11 : p10) : (r_col == 0 ? p01 : p00);
+            int g2 = p00 + p01 + p10 + p11 - r - b;                   /* Gr + Gb */
+            float fr = ((float)r - black) * scale, fg = ((float)g2 * 0.5f - black) * scale, fb = ((float)b - black) * scale;
+            d[0] = (uint8_t)(fb < 0 ? 0 : fb > 255 ? 255 : fb); d[1] = (uint8_t)(fg < 0 ? 0 : fg > 255 ? 255 : fg); d[2] = (uint8_t)(fr < 0 ? 0 : fr > 255 ? 255 : fr); d[3] = 255;
+        }
+    }
+    return ow;
+}
+
 /* RAW_SENSOR frame (16-bit little-endian Bayer, values black..white): per-row R, G, B profiles
  * computed from the mosaic itself, no ISP in between. Columns: 2x2 Bayer blocks whose maximum
  * (sampled every 16th row) is above 30 % of the frame's brightest block; blocks that clip
@@ -355,11 +390,11 @@ Java_com_federicopaglioni_blinko_RsCore_processFrameRaw(JNIEnv *env, jclass cls,
     int n = rs_rx_process(g_rx, ds == 2 ? g_r2 : g_r, ds == 2 ? g_g2 : g_g, ds == 2 ? g_b2 : g_b, hd, t);
     const rs_dec_stats_t *st = rs_rx_stats(g_rx);
     if (statsOut) {
-        jfloat s[14] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx) * (float)ds,
+        jfloat s[15] = { (float)st->syncs, (float)st->crc_fail, st->contrast, rs_rx_rows_per_chip(g_rx) * (float)ds,
                          (float)(2 * first), (float)(2 * last + 2), (float)h, (float)rs_rx_messages(g_rx),
                          (float)rs_rx_mode(g_rx), (float)rs_rx_pilots(g_rx), rs_rx_cal_cond(g_rx), (float)rs_rx_packets(g_rx),
-                         (float)peak, (float)satrows / (float)h };
-        (*env)->SetFloatArrayRegion(env, statsOut, 0, 14, s);
+                         (float)peak, (float)satrows / (float)h, (float)rs_rx_stitched(g_rx) };
+        (*env)->SetFloatArrayRegion(env, statsOut, 0, 15, s);
     }
     if (profileOut) {
         jsize m = (*env)->GetArrayLength(env, profileOut);

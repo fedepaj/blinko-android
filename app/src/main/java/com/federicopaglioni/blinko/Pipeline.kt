@@ -8,7 +8,7 @@ import kotlin.math.max
 /** Everything the UI and the remote `stats` need from the last frames. */
 class Snapshot {
     var fps = 0; var packetsPerSec = 0f
-    var stats = FloatArray(14)
+    var stats = FloatArray(15)
     var profile = FloatArray(0)
     var packets = FloatArray(0); var packetCount = 0
     var tracks = FloatArray(0); var trackCount = 0
@@ -41,7 +41,7 @@ class Pipeline(val recorder: Recorder) {
 
     private var bgra: ByteBuffer? = null
     private var bw = 0; private var bh = 0
-    private val stats = FloatArray(14)
+    private val stats = FloatArray(15)
     private val profile = FloatArray(4096)
     private val packets = FloatArray(96 * 4)
     private val trackBuf = FloatArray(8 * 8)
@@ -62,14 +62,19 @@ class Pipeline(val recorder: Recorder) {
 
     fun process(img: Image, tNs: Long) {
         if (paused) return
-        if (img.format == android.graphics.ImageFormat.RAW_SENSOR) { processRaw(img, tNs); return }
-        val w = img.width; val h = img.height
-        val step = maxOf(1, w / 480)                 // 1080p -> /4, 4K -> /8: always ~480 columns
+        val raw = img.format == android.graphics.ImageFormat.RAW_SENSOR
+        if (raw && labMode) { processRaw(img, tNs); return }            // strobe calibration on the full-resolution mosaic
+        // RAW frames become a half-resolution BGRA image (one pixel per 2x2 Bayer block) and take the
+        // same path as YUV: segmentation keeps the lights apart, the multi-source receiver tracks them
+        val w = if (raw) img.width / 2 else img.width; val h = if (raw) img.height / 2 else img.height
+        val step = maxOf(1, w / 480)                 // 1080p -> /4, 4K -> /8, RAW 2000 blocks -> /4: always ~480 columns
         val ow = w / step
         val need = ow * h * 4
         if (bgra == null || bgra!!.capacity() < need) { bgra = ByteBuffer.allocateDirect(need).order(ByteOrder.nativeOrder()); bw = ow; bh = h }
         val buf = bgra!!
-        val outW = if (img.format == android.graphics.PixelFormat.RGBA_8888) {
+        val outW = if (raw) {
+            val p = img.planes[0]; RsCore.convertRawToBgra(p.buffer, p.rowStride, img.width, img.height, rawCfa, rawBlack, rawWhite, step, buf)
+        } else if (img.format == android.graphics.PixelFormat.RGBA_8888) {
             val p = img.planes[0]; RsCore.convertRgbaToBgra(p.buffer, p.rowStride, p.pixelStride, w, h, step, buf)
         } else {
             val py = img.planes[0]; val pu = img.planes[1]; val pv = img.planes[2]
@@ -163,7 +168,7 @@ class Pipeline(val recorder: Recorder) {
     private fun publish(n: Int, now: Long, w: Int, h: Int) {
         val s = snapshot
         s.fps = fps; s.packetsPerSec = pps
-        System.arraycopy(stats, 0, s.stats, 0, 14)
+        System.arraycopy(stats, 0, s.stats, 0, 15)
         s.profile = downsample(profile, stats[RsCore.ST_COUNT].toInt(), 320)
         s.packets = packets.copyOf(); s.packetCount = n
         s.tracks = lastTracks; s.trackCount = lastTrackCount

@@ -117,8 +117,10 @@ class Session(private val ctx: Context) {
     fun startRecording(seconds: Double): Boolean {
         if (isRecording) return false
         val c = camera.info
-        val step = Pipeline.stepFor(c.width)
-        val header = JSONObject().put("width", c.width / step).put("height", c.height).put("columnStep", step).put("pixelFormat", "BGRA")
+        val raw = settings.resolution == "RAW"                       // RAW frames are recorded as the half-resolution BGRA image the receiver sees
+        val pw = if (raw) c.width / 2 else c.width; val ph = if (raw) c.height / 2 else c.height
+        val step = Pipeline.stepFor(pw)
+        val header = JSONObject().put("width", pw / step).put("height", ph).put("columnStep", step).put("pixelFormat", "BGRA")
             .put("fps", c.fps).put("exposureUs", c.exposureUs).put("iso", c.iso).put("lensPosition", c.lensPosition)
             .put("camera", c.name).put("device", "${Build.MANUFACTURER} ${Build.MODEL}").put("axis", settings.axisName)
             .put("startedAt", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date()))
@@ -166,7 +168,7 @@ class Session(private val ctx: Context) {
         return JSONObject().put("type", "stats").put("t", System.currentTimeMillis() / 1000.0).put("fps", s.fps).put("pkt_per_s", s.packetsPerSec)
             .put("rows_per_chip", st[RsCore.ST_RPC]).put("contrast", st[RsCore.ST_CONTRAST]).put("syncs", st[RsCore.ST_SYNCS].toInt()).put("crc_fail", st[RsCore.ST_CRC_FAIL].toInt())
             .put("packets", s.totalPackets).put("messages", s.totalMessages).put("roi", JSONArray().put(st[RsCore.ST_ROI0].toInt()).put(st[RsCore.ST_ROI1].toInt()))
-            .put("mode", s.modeName).put("pilots", st[RsCore.ST_PILOTS].toInt()).put("cond", st[RsCore.ST_COND]).put("peak", st[RsCore.ST_PEAK].toInt()).put("sat", st[RsCore.ST_SAT])
+            .put("mode", s.modeName).put("pilots", st[RsCore.ST_PILOTS].toInt()).put("cond", st[RsCore.ST_COND]).put("peak", st[RsCore.ST_PEAK].toInt()).put("sat", st[RsCore.ST_SAT]).put("stitched", st[RsCore.ST_STITCHED].toInt())
             .put("last_packet_age", s.lastPacketAge).put("exposure_us", c.exposureUs).put("exposure_actual_us", c.actualExposureUs).put("readout_ms", c.readoutMs).put("iso", c.iso).put("cam_fps", c.fps).put("width", c.width).put("height", c.height)
             .put("still", motion.isStill).put("motion", motion.level).put("recording", isRecording).put("tracks", tr).put("thermal", "nominal")
             .apply { lab?.let { l -> put("lab", JSONObject().put("period_rows", l.periodRows).put("strength", l.strength).put("row_time_us", l.rowTimeUs).put("readout_ms", l.readoutMs).put("count", l.count)) } }

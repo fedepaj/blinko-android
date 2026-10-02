@@ -7,7 +7,7 @@ object RsCore {
     init { System.loadLibrary("blinko") }
 
     external fun reset()
-    /** Returns packets decoded in this frame; fills stats[14], profile (downsampled luma), packets (start,end,slot,channel)*n.
+    /** Returns packets decoded in this frame; fills stats[15], profile (downsampled luma), packets (start,end,slot,channel)*n.
      *  u/v may be null (luma-only). */
     external fun processFrame(y: ByteBuffer, yRs: Int, yPs: Int, u: ByteBuffer?, uRs: Int, uPs: Int, v: ByteBuffer?, vRs: Int, vPs: Int,
                               w: Int, h: Int, axis: Int, t: Float,
@@ -28,7 +28,9 @@ object RsCore {
                                   w: Int, h: Int, step: Int, out: ByteBuffer): Int
     /** RGBA_8888 -> packed BGRA, columns subsampled by step. Returns the output width. */
     external fun convertRgbaToBgra(px: ByteBuffer, rowStride: Int, pixelStride: Int, w: Int, h: Int, step: Int, out: ByteBuffer): Int
-    /** RAW_SENSOR (16-bit Bayer) frame: per-row R/G/B profiles from the mosaic, single receiver. Same outputs as processFrameBgra. */
+    /** RAW_SENSOR (16-bit Bayer) -> packed BGRA at half resolution (one pixel per 2x2 block, block columns subsampled by step), clipping at 255. Returns the output width. */
+    external fun convertRawToBgra(px: ByteBuffer, rowStride: Int, w: Int, h: Int, cfa: Int, black: Int, white: Int, step: Int, out: ByteBuffer): Int
+    /** RAW_SENSOR (16-bit Bayer) frame: per-row R/G/B profiles from the mosaic, single receiver (the lab's full-resolution path). Same outputs as processFrameBgra. */
     external fun processFrameRaw(px: ByteBuffer, rowStride: Int, w: Int, h: Int, cfa: Int, black: Int, white: Int, t: Float,
                                  stats: FloatArray?, profile: FloatArray?, packets: FloatArray?): Int
     /** Last r/g/b profiles given to the receiver (RAW path): out = r[n] g[n] b[n]; returns n. */
@@ -45,9 +47,9 @@ object RsCore {
 
     val levelNames = arrayOf("DEBUG", "INFO", "WARN", "ERROR", "FATAL", "STATUS", "FAULT", "?")
 
-    /** Stats layout written by processFrame*: indices into the FloatArray(14). */
+    /** Stats layout written by processFrame*: indices into the FloatArray(15). */
     const val ST_SYNCS = 0; const val ST_CRC_FAIL = 1; const val ST_CONTRAST = 2; const val ST_RPC = 3
     const val ST_ROI0 = 4; const val ST_ROI1 = 5; const val ST_COUNT = 6; const val ST_MESSAGES = 7
     const val ST_MODE = 8; const val ST_PILOTS = 9; const val ST_COND = 10; const val ST_PACKETS = 11
-    const val ST_PEAK = 12; const val ST_SAT = 13
+    const val ST_PEAK = 12; const val ST_SAT = 13; const val ST_STITCHED = 14   // packets stitched from pieces across frames
 }
