@@ -58,11 +58,12 @@ class SettingsTab(private val ctx: Context, private val box: LinearLayout, priva
 
         f.header("Debug")
         f.switch("Remote session (TCP port ${RemoteServer.PORT})", s.remoteEnabled) { v -> s.remoteEnabled = v; onChanged(false); updateLabels() }
+        f.switch("Allow Wi-Fi (LAN) connections", s.remoteLan) { v -> s.remoteLan = v; onChanged(false); updateLabels() }
         remoteNote = f.note("")
         f.switch("Recording mode (Record button, .rsrec in app files)", s.recordingEnabled) { v -> s.recordingEnabled = v; onChanged(false) }
 
         f.header("Tips")
-        f.note("Hold the phone 1–3 cm from the board so the defocused LED fills the frame. Keep exposure at the shortest setting: it must stay below one chip (30 µs on the demo boards). Tap the profile to switch the scan axis, long-press it to reset the receiver. Lab measures the sensor row time with the board's strobe.")
+        f.note("Hold the phone 1–3 cm from the board so the defocused LED fills the frame. Keep exposure at the shortest setting: it should stay below T, the shortest run of the signal (60 µs on the demo boards). Tap the profile to switch the scan axis, long-press it to reset the receiver. Lab measures the sensor row time with the board's strobe.")
         f.note("Blinko · ${session.settingsJson().optString("device")}")
     }
 
@@ -74,7 +75,8 @@ class SettingsTab(private val ctx: Context, private val box: LinearLayout, priva
         isoLabel?.text = "ISO  ${(c.minIso + s.iso * (c.maxIso - c.minIso)).toInt()}"
         focusLabel?.text = String.format(Locale.US, "Focus  %.2f  (0 nearest, 1 infinity)", s.lensPosition)
         zoomLabel?.text = String.format(Locale.US, "Zoom  ×%.1f", s.zoom)
-        remoteNote?.text = if (s.remoteEnabled) "Wi-Fi: ${session.remoteAddress()}  ·  USB: adb forward tcp:7778 tcp:7777  ·  clients: ${session.remoteClients}" else "Off"
+        remoteNote?.text = if (!s.remoteEnabled) "Off"
+            else (if (s.remoteLan) "Wi-Fi: ${session.remoteAddress()} (anyone on the network can connect)" else "This phone only") + "  ·  USB: adb forward tcp:7778 tcp:7777  ·  clients: ${session.remoteClients}"
         val st = session.pipeline.snapshot
         statsNote?.text = "Stats: ${st.totalPackets} packets, ${st.totalMessages} messages, syncs/frame ${st.stats[RsCore.ST_SYNCS].toInt()}, crc fail ${st.stats[RsCore.ST_CRC_FAIL].toInt()}"
     }

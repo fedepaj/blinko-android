@@ -231,6 +231,12 @@ class MainActivity : AppCompatActivity() {
         if (started) { session.stop(); started = false }
     }
 
+    override fun onDestroy() {
+        // a recreated activity makes its own Session: this one gives back the camera thread, the recorder thread, the stats tick and the server port
+        session.close()
+        super.onDestroy()
+    }
+
     private fun startWhenReady() {
         if (started) return
         if (preview.isAvailable) start() else preview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {

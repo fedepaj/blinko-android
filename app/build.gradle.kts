@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.federicopaglioni.blinko"
-        minSdk = 26
+        minSdk = 28          // CameraController uses SessionConfiguration / createCaptureSession(SessionConfiguration): API 28
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"

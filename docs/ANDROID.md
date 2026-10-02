@@ -1,82 +1,129 @@
-# Android
+# Android app: how it is built
 
-**Stato**: app minima funzionante in `android/Blinko` (Kotlin, Camera2,
-core C via NDK/JNI), APK di debug in `build/Blinko-android-debug.apk`
-(`make android`). Non ancora provata su un telefono reale (nessun Android
-collegato al Mac durante lo sviluppo).
+Kotlin with Android views (AppCompat / Material, no Compose), Camera2, and the
+shared C receiver from the `core/` submodule behind one JNI file. One activity,
+portrait, arm64 only, API 28+. The README covers building and using it; this
+page describes the inside.
 
-Uso: aprire, concedere la fotocamera, avvicinare il LED a 1–3 cm. Tocco sul
-grafico = inverte l'asse di scansione (righe/colonne), pressione lunga =
-azzera. La riga di stato mostra `manual=true/false` (capability
-MANUAL_SENSOR), esposizione minima, fps, pacchetti/s e righe/chip.
-
-Se `manual=false` il telefono non permette l'esposizione manuale: si usa la
-compensazione AE al minimo e i chip risultano sfumati; servirà `chip 60` o più
-sulla scheda. Se `rows/chip` resta 0 con contrasto alto, provare l'altro asse.
-
-## Piano originale
-
-Il core C (`core/rs_decoder.c`, `rs_assembler.c`, `rs_proto.h`) è già
-portabile e senza dipendenze: su Android si compila con l'NDK e si chiama via
-JNI. Cambia solo il guscio (camera + UI).
-
-## Architettura
+## Source layout
 
 ```
-app/
-  src/main/cpp/          CMakeLists.txt → libcore (core/*.c) + blinko_jni.cpp
-  src/main/java/.../
-    CameraController.kt  Camera2: formato YUV_420_888 1080p, esposizione manuale
-    FrameProcessor.kt    piano Y → ROI → profilo per riga (RenderScript no; loop Kotlin/NDK)
-    Decoder.kt           JNI: decode(profile) → packets; feed(packet) → message
-    ui/                  Compose: Live, Console, Lab, Settings
+app/src/main/cpp/
+  CMakeLists.txt     libblinko.so = blinko_jni.c + the receiver sources of core/ (-O2, RS_DEC_THREADS)
+  blinko_jni.c       frame conversion, profiles, the calls into rs_rx / rs_multi, the lock
+app/src/main/java/com/federicopaglioni/blinko/
+  MainActivity.kt    binds the four tabs (Live, Console, Lab, Settings) to a Session
+  Session.kt         the model: owns everything below, handles the remote commands
+  CameraController.kt  Camera2 device, capture session, manual exposure / ISO / focus / zoom
+  Pipeline.kt        per frame: convert, record, decode, collect messages, publish a Snapshot
+  RsCore.kt          the Kotlin side of the JNI bridge
+  Recorder.kt        .rsrec writer            ReplayEngine.kt   .rsrec through the receiver
+  RemoteServer.kt    TCP server               Console.kt        message history
+  Settings.kt        SharedPreferences        MotionMonitor.kt  gyroscope / accelerometer
+  LabTab.kt, SettingsTab.kt, Forms.kt, MarkerView.kt, ProfileView.kt, MessageAdapter.kt   views
 ```
 
-## Punti chiave Camera2 (equivalenti AVFoundation)
+`Session` is created in `MainActivity.onCreate` and closed in `onDestroy`
+(camera thread, recorder thread, stats tick and server port are released);
+`onResume` / `onPause` open and close the camera.
 
-| iOS | Android Camera2 |
+## Threads
+
+| thread | what runs on it |
 |---|---|
-| `setExposureModeCustom(duration, iso)` | `CONTROL_AE_MODE = OFF`, `SENSOR_EXPOSURE_TIME` (ns), `SENSOR_SENSITIVITY` |
-| `setFocusModeLocked(lensPosition: 1)` | `CONTROL_AF_MODE = OFF`, `LENS_FOCUS_DISTANCE = 0` (infinito → LED vicino sfocato) |
-| esposizione minima | `SENSOR_INFO_EXPOSURE_TIME_RANGE.lower` (spesso 10–100 µs) |
-| 420f Y plane | `ImageReader` `YUV_420_888`, `planes[0]` con `rowStride` |
-| `videoRotationAngle = 0` | il buffer è già nell'orientamento nativo del sensore |
-| 60/120/240 fps | `CONTROL_AE_TARGET_FPS_RANGE` + `StreamConfigurationMap.getHighSpeedVideoFpsRanges` (constrained high speed session per >60 fps) |
-| stabilizzazione off | `CONTROL_VIDEO_STABILIZATION_MODE = OFF`, `LENS_OPTICAL_STABILIZATION_MODE = OFF` |
+| main | UI, every `Session` callback, the remote command handler, the 5 Hz stats broadcast |
+| `blinko.camera` | Camera2 callbacks and the whole per-frame pipeline: conversion, recording hand-off, decoding. Urgent-display priority |
+| decode workers | short-lived pthreads made by the JNI layer inside one decode call (the receiver's parallel hook): a light's three colour channels and the sync candidates of a profile |
+| `blinko.recorder` | writes queued frames to the recording file and ends a recording at its deadline |
+| `blinko.replay` | exists while a replay runs: reads a recording and feeds the receiver |
+| `blinko.remote`, `blinko.remote.client` | accept loop, one reader per client; each client also has a single-thread writer |
 
-Requisiti: capability `MANUAL_SENSOR` (`REQUEST_AVAILABLE_CAPABILITIES`),
-presente sulla maggior parte dei telefoni di fascia media/alta; senza di essa
-si può solo usare `CONTROL_AE_EXPOSURE_COMPENSATION` al minimo (funziona
-peggio, chip più lunghi).
+The camera thread publishes an immutable `Snapshot` (stats, profile, packet
+spans, tracks) a few times a second and posts messages; the main thread only
+reads what it is handed.
 
-Attenzione all'asse di scansione: alcuni sensori Android leggono le righe in
-verticale nel buffer nativo; il **Lab mode** (strobe + autocorrelazione sui due
-assi) risolve il dubbio, esattamente come sull'iPhone.
+The receiver is process-wide state in the native library. The camera thread
+decodes with it, the main thread resets it and changes its settings, the
+replay thread does both: every native entry point that touches it holds one
+mutex for the whole call. A replay pauses the live pipeline first, waits for
+the frame in flight, resets the receiver, and resets it again when it ends.
 
-## JNI
+## The JNI layer
 
-```cpp
-extern "C" JNIEXPORT jint JNICALL
-Java_..._Decoder_decode(JNIEnv *env, jobject, jfloatArray profile, jint n, jobject outBuffer) {
-    jfloat *p = env->GetFloatArrayElements(profile, nullptr);
-    rs_packet_t out[64]; rs_dec_stats_t st;
-    int k = rs_decode_profile(p, n, &cfg, out, 64, &st);
-    // copia out[] in un ByteBuffer direct (struct packed) o in un FloatArray
-    env->ReleaseFloatArrayElements(profile, p, JNI_ABORT);
-    return k;
-}
-```
-Lo stato dell'assembler (`rs_asm_t`) vive nel nativo; `rs_asm_feed` restituisce
-il testo completo come `jstring`.
+`RsCore` is an `object` of `external` functions:
 
-## Passi
+- **convert**: `convertYuvToBgra`, `convertRgbaToBgra`, `convertRawToBgra`
+  turn the camera buffer into a packed BGRA image in a direct `ByteBuffer`.
+- **decode**: `processFrameBgraMulti` runs the multi-source receiver
+  (`rs_multi`: segmentation, tracking, one `rs_rx` per light) and returns the
+  tracks; `processFrameBgra` runs the single receiver (`rs_rx`) on the R, G, B
+  profiles of the frame's bright region; `profileBgra` computes that profile
+  and the frame figures without decoding, for the chart while the multi-source
+  receiver owns the frame; `processFrameRaw` is the strobe calibration's path
+  on a RAW frame.
+- **settings**: `setExposureRows`, `setRowTime`, `setMinContrast`, `reset`.
+  The JNI layer keeps the values and installs them again after every reset.
+- **messages**: `pollMessage()` returns slot, level, source and the text
+  (bytes decoded as UTF-8), from the multi-source receiver's queue or, when
+  the single receiver decoded the last frame, from its queue (source 0).
 
-1. progetto Android Studio (Kotlin, Compose, minSdk 26), modulo NDK con
-   `core/` (CMake `add_library(rscore STATIC ../../../../core/rs_decoder.c ...)`);
-2. Camera2 con esposizione manuale minima, fuoco a infinito, 1080p60,
-   `ImageReader` YUV → profilo per riga (stesso algoritmo di `FrameProcessor.swift`);
-3. decoder JNI + assembler + console; haptics (`Vibrator`), accelerometro
-   (`SensorManager`) per "tieni fermo";
-4. Lab mode per `t_row`; tabella dei telefoni testati in `docs/CALIBRATION.md`;
-5. test con i frame `.pgm` salvati dall'app iOS: `tools/decode_image.py` è il
-   riferimento per confrontare i risultati.
+Outputs come back in arrays the caller owns: `stats` (15 floats, indices
+`RsCore.ST_*`), `profile`, `packets` (start, end, slot, channel), `tracks`
+(id, x, y, radius, mode, packets, messages, group).
+
+## Capture formats and what the receiver gets
+
+Whatever the format, the pipeline makes one BGRA image per frame with every
+row kept (rows are the time axis) and about 480 columns (`step` = width / 480).
+That image is what the receiver decodes, what the recorder stores and what the
+remote `frame` command returns.
+
+| Settings › Resolution | camera stream | conversion | rows of the BGRA image |
+|---|---|---|---|
+| 1080p, 4K | `RGBA_8888` when the camera offers it, else `YUV_420_888` | columns thinned by `step`; YUV with full-range BT.601 | sensor rows of that stream |
+| RAW | `RAW_SENSOR`, largest size | one pixel from a 2×2 Bayer block per 4 sensor rows, G = (Gr + Gb) / 2, scaled by black / white level, block columns thinned by `step` | one per 4 sensor rows |
+
+A resolution the camera lacks falls back to 1080p; `CameraInfo.mode` is the
+mode actually running.
+
+With **Multi-source** on, the image goes to the multi-source receiver; when it
+tracks no light, and with Multi-source off, the single receiver decodes the
+bright region instead. Both are told the exposure in rows and the row time of
+this image: `exposure_us / rowUs` and `rowUs`, where `rowUs` is stored per
+capture mode and comes from the strobe calibration (defaults: the S21 FE's).
+
+**Strobe calibration mode** decodes nothing useful: it takes the profile and
+measures the band period by autocorrelation (`Pipeline.period`), which with
+the strobe frequency gives the row time. In 1080p / 4K the profile is the BGRA
+image's. In RAW it is computed from the mosaic at full resolution
+(`processFrameRaw`), so the measured row time is the sensor's and the stored
+`rowUs` is that times 4.
+
+## Remote session
+
+`RemoteServer` listens on TCP port 7777 while **Settings › Remote session** is
+on. It binds 127.0.0.1, which `adb forward tcp:7778 tcp:7777` reaches over
+USB; with **Allow Wi-Fi (LAN) connections** on it binds every interface.
+There is no authentication.
+
+Framing in both directions: `u32` big-endian length, `u8` kind (0 JSON,
+1 binary), payload; a binary payload is announced by the JSON before it. An
+incoming frame is at most 1 MB, a longer one closes the connection. Commands
+(`get`, `set`, `stats`, `messages`, `reset`, `frame`, `record`, `files`,
+`pull`, `delete`, `replay`) are handled by `Session.handleRemote` on the main
+thread; `set` validates the value before it is stored. Connected clients also
+receive `stats` five times a second and every message as it is decoded. The
+protocol is the iOS app's, the client is `ios/tools/rslive.py`.
+
+## Recordings and other files
+
+Everything is in the app's internal storage (`Context.filesDir`):
+
+- `recordings/rec-YYYYMMDD-HHMMSS.rsrec`: `"RSREC001"`, a JSON header (size,
+  `columnStep`, camera, exposure, note), then per frame a timestamp, gyroscope
+  and accelerometer samples and the raw BGRA image. Written by `Recorder`,
+  read by `core/tools/rsrec.py`, the iOS app and `ReplayEngine`. They leave
+  the phone through the remote session (`record`, `pull`) or the share sheet
+  (a `FileProvider`).
+- `history.json`: the console's message history and the board ids.
+- Settings are in the `blinko` SharedPreferences.

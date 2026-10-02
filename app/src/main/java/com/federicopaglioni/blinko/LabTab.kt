@@ -27,7 +27,7 @@ class LabTab(private val ctx: Context, private val box: LinearLayout, private va
         val f = Form(ctx, box)
         f.header("Strobe calibration")
         f.switch("Strobe calibration mode", s.labMode) { v -> s.labMode = v; onChanged() }
-        f.rowView("Strobe frequency (Hz)", f.edit(s.strobeHz.toInt().toString(), Form.NUMBER) { t -> t.toDoubleOrNull()?.let { s.strobeHz = it; onChanged() } })
+        f.rowView("Strobe frequency (Hz)", f.edit(s.strobeHz.toInt().toString(), Form.NUMBER) { t -> t.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }?.let { s.strobeHz = it; onChanged() } })   // 0 would make the row time infinite
         f.note("Flash the strobe_calib sketch (or send `strobe 2000` to the demo), enable this mode and point the camera at the LED.")
 
         f.header("Replay a recording")
@@ -76,8 +76,9 @@ class LabTab(private val ctx: Context, private val box: LinearLayout, private va
             f.row("Row time", if (r.rowTimeUs > 0) String.format(Locale.US, "%.2f µs", r.rowTimeUs) else "-")
             f.row("Frame readout", if (r.readoutMs > 0) String.format(Locale.US, "%.2f ms", r.readoutMs) else "-")
             if (r.rowTimeUs > 0) {
-                f.row("Min chip (4 rows)", String.format(Locale.US, "%.0f µs", 4 * r.rowTimeUs))
-                f.row("Packet height @30µs", String.format(Locale.US, "%.0f rows", 67 * 30 / r.rowTimeUs))
+                f.row("Min T (1.5 rows/chip)", String.format(Locale.US, "%.0f µs", 4.5 * r.rowTimeUs))
+                // a packet is 82 chips (RS_PKT_CHIPS) and a chip is T/3: 20 µs at the default T = 60 µs
+                f.row("Packet height @T=60µs", String.format(Locale.US, "%.0f rows", 82 * 20 / r.rowTimeUs))
             }
         }
         val c = camBox ?: return

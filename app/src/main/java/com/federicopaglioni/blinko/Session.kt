@@ -51,12 +51,15 @@ class Session(private val ctx: Context) {
     init {
         pipeline.onSnapshot = { s -> main.post { onSnapshot?.invoke(s) } }
         pipeline.onMessage = { slot, level, text, source -> main.post { deliver(slot, level, text, source, false) } }
-        pipeline.onLab = { r -> main.post { lab = r; if (r.rowTimeUs > 2 && r.rowTimeUs < 30 && r.strength > 0.3f) { settings.rowUs = r.rowTimeUs; settings.save() }; onLab?.invoke(r) } }
+        // What is stored is the row time of the image the receiver decodes: the measured one times rowBin. In RAW the
+        // calibration runs on sensor rows (2.65 µs on the S21 FE) and the receiver on one row per 4 of them (10.6 µs);
+        // storing the measured figure there gave the receiver an exposure four times too long in rows.
+        pipeline.onLab = { r -> main.post { lab = r; if (r.rowTimeUs > 2 && r.rowTimeUs < 30 && r.strength > 0.3f) { settings.setRowUs(camera.info.mode, r.rowTimeUs * r.rowBin); settings.save() }; onLab?.invoke(r) } }
         recorder.latestMotion = { motion.latest() }
         recorder.onFinished = { summary -> main.post { isRecording = false; lastRecording = summary; Diag.log("[recorder] done: $summary"); onStatus?.invoke(summary); finishRemoteRecording() } }
         camera.onInfo = { i -> main.post { pipeline.rawCfa = i.cfa; pipeline.rawBlack = i.blackLevel; pipeline.rawWhite = i.whiteLevel
             val e = if (i.actualExposureUs > 0) i.actualExposureUs else i.exposureUs
-            val rowUs = settings.rowUs   /* the HAL's rolling-shutter skew is not trustworthy here (28 ms reported, 8.5 ms measured): the strobe calibration rules */
+            val rowUs = settings.rowUs(i.mode)   /* the HAL's rolling-shutter skew is not trustworthy here (28 ms reported, 8.5 ms measured): the strobe calibration rules */
             RsCore.setExposureRows(if (e > 0) (e / rowUs).toFloat() else 0f); RsCore.setRowTime((rowUs * 1e-6).toFloat()); onCameraInfo?.invoke(i) } }
         camera.onError = { e -> main.post { Diag.warn("[camera] $e"); onStatus?.invoke(e) } }
         camera.onFrame = { img, t -> pipeline.process(img, t) }
@@ -65,7 +68,10 @@ class Session(private val ctx: Context) {
         replay.onMessage = { slot, level, text, source -> main.post { deliver(slot, level, text, source, true) } }
         replay.onProgress = { p -> main.post { replayProgress = p; onStatus?.invoke(p) } }
         replay.onDone = { summary -> main.post {
-            replayProgress = summary; pipeline.paused = false; onStatus?.invoke(summary)
+            // `running` goes false on the replay thread before this runs, so another replay can have been started in
+            // between (startReplay, also on this thread): then the pipeline stays paused, and that replay's own end resumes it
+            if (!replay.running) pipeline.paused = false
+            replayProgress = summary; onStatus?.invoke(summary)
             remote.broadcast(JSONObject().put("type", "replay").put("state", "done").put("summary", summary))
         } }
     }
@@ -82,13 +88,28 @@ class Session(private val ctx: Context) {
         if (isRecording) recorder.finish()
     }
 
+    /**
+     * The activity is destroyed: let go of everything this session holds, i.e. the camera and its thread, the recorder
+     * thread, a running replay, the stats tick and the server port. The session cannot be used afterwards. (A recreated
+     * activity makes a new Session; without this the old one lived on next to it, still bound to port 7777.)
+     */
+    fun close() {
+        stop()
+        replay.cancel()
+        stopRemote()
+        main.removeCallbacksAndMessages(null)
+        onSnapshot = null; onMessage = null; onStatus = null; onLab = null; onRemoteClients = null; onCameraInfo = null
+        onSettingsChanged = null; previewTexture = null
+        camera.release(); recorder.close()
+    }
+
     /** Settings changed: push them to the pipeline and the camera (`reopen` when the camera id changed). */
     fun applySettings(reopen: Boolean = false, preview: SurfaceTexture? = null) {
         settings.save()
         applyPipelineSettings()
         if (reopen) camera.open(settings, preview) else camera.apply(settings)
+        if (remote.isRunning && (!settings.remoteEnabled || remote.lan != settings.remoteLan)) stopRemote()   // off, or listening on the wrong interfaces
         if (settings.remoteEnabled && !remote.isRunning) startRemote()
-        if (!settings.remoteEnabled && remote.isRunning) stopRemote()
     }
 
     private fun applyPipelineSettings() {
@@ -97,8 +118,9 @@ class Session(private val ctx: Context) {
         RsCore.setMinContrast(settings.minContrast)
     }
 
-    private fun startRemote() { remote.start(); main.removeCallbacks(statsTick); main.post(statsTick); Diag.log("[remote] server on ${remoteAddress()}") }
+    private fun startRemote() { remote.start(settings.remoteLan); main.removeCallbacks(statsTick); main.post(statsTick); if (settings.remoteLan) Diag.log("[remote] server on ${remoteAddress()}") }
     private fun stopRemote() { main.removeCallbacks(statsTick); remote.stop() }
+    /** Where a computer on the same network reaches the server (when LAN connections are allowed). */
     fun remoteAddress() = (RemoteServer.localIPv4() ?: "no Wi-Fi") + ":${RemoteServer.PORT}"
 
     private fun deliver(slot: Int, level: Int, text: String, source: Int, fromReplay: Boolean) {
@@ -117,8 +139,10 @@ class Session(private val ctx: Context) {
     fun startRecording(seconds: Double): Boolean {
         if (isRecording) return false
         val c = camera.info
-        val raw = settings.resolution == "RAW"                       // RAW frames are recorded as the half-resolution BGRA image the receiver sees
-        val pw = if (raw) c.width / 2 else c.width; val ph = if (raw) c.height / 4 else c.height
+        // by the format the camera delivers, not the resolution asked for (a camera without RAW runs 1080p): RAW frames
+        // are recorded as the reduced BGRA image the receiver sees
+        val raw = c.format == "RAW"
+        val pw = if (raw) c.width / 2 else c.width; val ph = if (raw) c.height / Pipeline.RAW_ROW_BIN else c.height
         val step = Pipeline.stepFor(pw)
         val header = JSONObject().put("width", pw / step).put("height", ph).put("columnStep", step).put("pixelFormat", "BGRA")
             .put("fps", c.fps).put("exposureUs", c.exposureUs).put("iso", c.iso).put("lensPosition", c.lensPosition)
@@ -151,7 +175,7 @@ class Session(private val ctx: Context) {
     fun startReplay(f: File) {
         if (replay.running) return
         pipeline.paused = true
-        replay.start(f)
+        replay.start(f) { pipeline.awaitIdle() }      // the frame the camera thread is in the middle of ends before the replay takes the receiver
     }
 
     // ---- remote session
@@ -178,7 +202,7 @@ class Session(private val ctx: Context) {
         val s = settings; val c = camera.info
         return JSONObject().put("camera", c.id).put("resolution", s.resolution).put("resolutions", JSONArray(c.resolutions)).put("fps", c.fps).put("exposure", s.exposure).put("iso", s.iso).put("lensPosition", s.lensPosition)
             .put("zoom", s.zoom).put("axis", s.axisName).put("minContrast", s.minContrast).put("multiSource", s.multiSource)
-            .put("remoteEnabled", s.remoteEnabled).put("labMode", s.labMode).put("strobeHz", s.strobeHz).put("rowUs", s.rowUs).put("note", s.note)
+            .put("remoteEnabled", s.remoteEnabled).put("remoteLan", s.remoteLan).put("labMode", s.labMode).put("strobeHz", s.strobeHz).put("rowUs", s.rowUs(c.mode)).put("note", s.note)
             .put("camera_name", c.name).put("cameras", JSONArray(camera.cameras().map { "${it.first}: ${it.second}" })).put("frame_rates", JSONArray(c.frameRates))
             .put("min_exposure_us", c.minExposureUs).put("exposure_us", c.exposureUs).put("iso_range", JSONArray().put(c.minIso).put(c.maxIso)).put("max_zoom", c.maxZoom)
             .put("format", c.format).put("device", "${Build.MANUFACTURER} ${Build.MODEL}")
@@ -196,6 +220,15 @@ class Session(private val ctx: Context) {
             "front" -> cams.firstOrNull { it.second.startsWith("Front") }?.first
             else -> null
         }
+    }
+
+    /** The recording a remote client names, or null: only a plain name of a regular file directly
+     *  inside the recordings directory. A name such as ".." passed the old test (no "/" and it
+     *  exists) and reached the directory above, where `delete` and `pull` then worked on it. */
+    private fun recordingNamed(name: String): File? {
+        if (name.isEmpty() || name == "." || name == ".." || name.contains('/') || name.contains('\\')) return null
+        val f = File(recorder.directory, name)
+        return if (f.isFile && f.canonicalFile.parentFile == recorder.directory.canonicalFile) f else null
     }
 
     private fun handleRemote(cmd: JSONObject, reply: (JSONObject, ByteArray?) -> Unit, replyFile: (JSONObject, File) -> Unit) {
@@ -216,40 +249,53 @@ class Session(private val ctx: Context) {
             }
             "pull" -> {
                 val n = cmd.optString("name")
-                val f = File(recorder.directory, n)
-                if (n.isEmpty() || n.contains("/") || !f.exists()) { err("no such recording"); return }
+                val f = recordingNamed(n)
+                if (f == null) { err("no such recording"); return }
                 sendFile(f, replyFile, false)
             }
             "delete" -> {
                 val names = cmd.optJSONArray("names")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: listOf(cmd.optString("name"))
                 var removed = 0
-                for (n in names) if (n.isNotEmpty() && !n.contains("/")) { val f = File(recorder.directory, n); if (f.exists() && f.delete()) removed++ }
+                for (n in names) if (recordingNamed(n)?.delete() == true) removed++
                 reply(JSONObject().put("type", "ok").put("cmd", name).put("removed", removed), null)
             }
             "set" -> {
                 val key = cmd.optString("key"); if (key.isEmpty()) { err("set needs key/value"); return }
                 val v = cmd.opt("value")
-                val d = (v as? Number)?.toDouble() ?: (v as? String)?.toDoubleOrNull() ?: 0.0
-                val b = (v as? Boolean) ?: (d != 0.0)
+                // What is accepted here is saved and read back at every start, so it is checked first: a number must be
+                // finite (org.json parses the literals NaN and Infinity, and "NaN".toDouble() is one too) and inside the
+                // setting's range. A NaN stored this way made settingsJson and the Settings tab throw at every launch.
+                val d = ((v as? Number)?.toDouble() ?: (v as? String)?.toDoubleOrNull())?.takeIf { it.isFinite() }
+                val b = (v as? Boolean) ?: d?.let { it != 0.0 } ?: (v as? String)?.lowercase()?.toBooleanStrictOrNull()
+                fun num(lo: Double, hi: Double): Double? = d?.takeIf { it in lo..hi } ?: run { err("$key needs a number in $lo..$hi"); null }
+                fun bool(): Boolean? = b ?: run { err("$key needs true or false"); null }
                 var reopen = false
-                val s = settings
+                val s = settings; val c = camera.info
                 when (key) {
-                    "fps" -> s.fps = d.toInt()
-                    "resolution" -> { val r = (v as? String ?: "").uppercase().let { if (it.startsWith("4")) "4K" else if (it.startsWith("RAW")) "RAW" else "1080p" }; if (r != s.resolution) { s.resolution = r; reopen = true } }
-                    "exposure" -> s.exposure = d
-                    "exposure_us" -> s.exposure = CameraController.exposureFraction(camera.info, d)
-                    "iso" -> s.iso = d
-                    "lensPosition" -> s.lensPosition = d.toFloat()
-                    "zoom" -> s.zoom = d
-                    "minContrast" -> s.minContrast = d.toFloat()
-                    "multiSource" -> s.multiSource = b
-                    "labMode" -> s.labMode = b
-                    "strobeHz" -> s.strobeHz = d
-                    "rowUs" -> s.rowUs = d
+                    "fps" -> {
+                        val f = (num(0.0, 240.0) ?: return).toInt()            // 0 = fastest
+                        if (f != 0 && c.frameRates.isNotEmpty() && f !in c.frameRates) { err("fps $f is not one of ${c.frameRates}"); return }
+                        s.fps = f
+                    }
+                    "resolution" -> {
+                        val r = (v as? String ?: "").uppercase().let { if (it.startsWith("4")) "4K" else if (it.startsWith("RAW")) "RAW" else if (it.startsWith("1080")) "1080p" else it }
+                        if (r !in c.resolutions) { err("resolution $v is not one of ${c.resolutions} on this camera"); return }
+                        if (r != s.resolution) { s.resolution = r; reopen = true }
+                    }
+                    "exposure" -> s.exposure = num(0.0, 1.0) ?: return
+                    "exposure_us" -> s.exposure = CameraController.exposureFraction(c, num(1.0, 1e6) ?: return)   // any duration: the sensor's range clamps it
+                    "iso" -> s.iso = num(0.0, 1.0) ?: return
+                    "lensPosition" -> s.lensPosition = (num(0.0, 1.0) ?: return).toFloat()
+                    "zoom" -> s.zoom = num(1.0, maxOf(1.0, c.maxZoom)) ?: return
+                    "minContrast" -> s.minContrast = (num(0.0, 255.0) ?: return).toFloat()
+                    "multiSource" -> s.multiSource = bool() ?: return
+                    "labMode" -> s.labMode = bool() ?: return
+                    "strobeHz" -> s.strobeHz = num(1.0, 1e6) ?: return
+                    "rowUs" -> s.setRowUs(c.mode, num(0.1, 1000.0) ?: return)
                     "axis" -> s.axis = if ((v as? String ?: "").lowercase().startsWith("col")) 1 else 0
                     "camera" -> { val id = cameraIdFor(v as? String ?: ""); if (id == null) { err("unknown camera $v"); return }; if (id != s.camera) { s.camera = id; reopen = true } }
                     "note" -> s.note = v as? String ?: ""
-                    "recordingEnabled" -> s.recordingEnabled = b
+                    "recordingEnabled" -> s.recordingEnabled = bool() ?: return
                     else -> { err("unknown key $key"); return }
                 }
                 applySettings(reopen, previewTexture?.invoke())
@@ -259,8 +305,8 @@ class Session(private val ctx: Context) {
             }
             "replay" -> {
                 val n = cmd.optString("name")
-                val f = File(recorder.directory, n)
-                if (n.isEmpty() || n.contains("/") || !f.exists()) { err("no such recording"); return }
+                val f = recordingNamed(n)
+                if (f == null) { err("no such recording"); return }
                 if (replay.running) { err("replay already running"); return }
                 startReplay(f); reply(JSONObject().put("type", "replay").put("state", "started").put("name", n), null)
             }
@@ -273,7 +319,9 @@ class Session(private val ctx: Context) {
             }
             "record" -> {
                 if (isRecording) { err("already recording"); return }
-                val seconds = cmd.optDouble("seconds", 2.0)
+                val asked = cmd.optDouble("seconds", 2.0)
+                if (asked.isNaN()) { err("record needs seconds as a number"); return }
+                val seconds = asked.coerceIn(0.1, 30.0)                       // a recording is ~60 MB/s on the phone's storage
                 if (cmd.has("note")) settings.note = cmd.optString("note")
                 pendingRecord = PendingRecord(reply, replyFile, cmd.optBoolean("send", true), cmd.optBoolean("keep", true))
                 if (!startRecording(seconds)) { pendingRecord = null; err("cannot start recording"); return }

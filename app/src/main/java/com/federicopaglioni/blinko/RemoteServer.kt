@@ -7,6 +7,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -22,7 +23,9 @@ import java.util.concurrent.Executors
  *
  * Framing, both directions: u32 big-endian length | u8 kind (0 = JSON, 1 = binary) | payload.
  * Binary payloads are always announced by the JSON message that precedes them.
- * Reach it over Wi-Fi (address shown in Settings) or over USB with `adb forward tcp:7778 tcp:7777`.
+ * Nothing authenticates a client. It listens on the phone's loopback address, which is where
+ * `adb forward tcp:7778 tcp:7777` arrives over USB; started with `lan` it listens on every interface
+ * and is reachable over Wi-Fi (address shown in Settings).
  */
 class RemoteServer {
     /** A command from a client; `reply` sends JSON (+ optional binary) back to that client only; `replyFile` streams a file after the JSON. */
@@ -32,6 +35,8 @@ class RemoteServer {
     private var server: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<Client>()
     @Volatile var isRunning = false; private set
+    /** How the running server was started: true = every interface, false = loopback only. */
+    var lan = false; private set
     val clientCount get() = clients.size
 
     private inner class Client(val sock: Socket) {
@@ -57,18 +62,25 @@ class RemoteServer {
         fun close() { writer.shutdown(); try { sock.close() } catch (_: IOException) {} }
     }
 
-    fun start() {
+    fun start(lan: Boolean) {
         if (isRunning) return
+        val s: ServerSocket
         try {
-            val s = ServerSocket(); s.reuseAddress = true; s.bind(InetSocketAddress(PORT))
-            server = s; isRunning = true
+            // A client can change settings and pull or delete recordings without a password, so the default is the
+            // loopback address: only this phone (adbd, for `adb forward`) can connect. It used to bind every interface
+            // for anyone on the network. 127.0.0.1 by number: InetAddress.getLoopbackAddress() is ::1 on Android, and
+            // adb forwards to the IPv4 one first.
+            s = ServerSocket(); s.reuseAddress = true
+            s.bind(if (lan) InetSocketAddress(PORT) else InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), PORT))
+            server = s; this.lan = lan; isRunning = true
         } catch (e: IOException) { Diag.warn("[remote] listener failed: $e"); return }
-        Diag.log("[remote] listening on $PORT")
+        Diag.log("[remote] listening on ${if (lan) "every interface" else "localhost"}, port $PORT")
         Thread({
-            while (isRunning) {
-                val sock = try { server?.accept() ?: break } catch (e: IOException) { break }
-                sock.tcpNoDelay = true
-                val c = Client(sock); clients.add(c); onClientsChanged?.invoke(clients.size)
+            while (isRunning && !s.isClosed) {     // its own socket: after a restart `server` is the next listener's
+                val sock = try { s.accept() } catch (e: IOException) { break }
+                // a client that resets right after connecting makes these throw: that ends this client, not the accept thread
+                val c = try { sock.tcpNoDelay = true; Client(sock) } catch (e: IOException) { try { sock.close() } catch (_: IOException) {}; continue }
+                clients.add(c); onClientsChanged?.invoke(clients.size)
                 Diag.log("[remote] client connected (${clients.size})")
                 Thread({ serve(c) }, "blinko.remote.client").apply { isDaemon = true; start() }
             }
@@ -91,7 +103,11 @@ class RemoteServer {
             val din = DataInputStream(c.sock.getInputStream())
             while (isRunning) {
                 val len = din.readInt(); val kind = din.readUnsignedByte()
-                if (len <= 0 || len > 64 * 1024 * 1024) continue
+                if (len == 0) continue
+                // Longer than any command (or negative): the client is dropped. The payload was once skipped without
+                // being read, so the loop went on taking its bytes for headers, and up to 64 MB were allocated on a
+                // client's word.
+                if (len < 0 || len > MAX_COMMAND) { Diag.warn("[remote] frame of $len bytes refused, closing the client"); break }
                 val payload = ByteArray(len); din.readFully(payload)
                 if (kind != 0) continue
                 val obj = try { JSONObject(String(payload)) } catch (e: Exception) { continue }
@@ -108,6 +124,7 @@ class RemoteServer {
 
     companion object {
         const val PORT = 7777
+        const val MAX_COMMAND = 1 shl 20     // bytes of one incoming frame: commands are small JSON objects
 
         fun frame(json: JSONObject, bin: ByteArray?): ByteArray {
             val j = json.toString().toByteArray()

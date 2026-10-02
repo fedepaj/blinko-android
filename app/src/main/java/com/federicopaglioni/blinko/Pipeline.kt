@@ -5,25 +5,36 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 
-/** Everything the UI and the remote `stats` need from the last frames. */
-class Snapshot {
-    var fps = 0; var packetsPerSec = 0f
-    var stats = FloatArray(15)
-    var profile = FloatArray(0)
-    var packets = FloatArray(0); var packetCount = 0
-    var tracks = FloatArray(0); var trackCount = 0
-    var totalPackets = 0; var totalMessages = 0
-    var lastPacketAge = 999.0
-    var width = 0; var height = 0
+/**
+ * Everything the UI and the remote `stats` need from the last frames. Immutable: the camera thread
+ * publishes a new one per update and the main thread works on the one it was handed, so its fields
+ * belong to the same frame. (One object updated in place let the main thread read a new track count
+ * with the previous track array.) The arrays are the snapshot's own copies and are never written again.
+ */
+class Snapshot(
+    val fps: Int = 0, val packetsPerSec: Float = 0f,
+    val stats: FloatArray = FloatArray(15),
+    val profile: FloatArray = FloatArray(0),
+    val packets: FloatArray = FloatArray(0), val packetCount: Int = 0,
+    val tracks: FloatArray = FloatArray(0),          // (id, x, y, radius, mode, packets, messages, group) per track
+    val totalPackets: Int = 0, val totalMessages: Int = 0,
+    val lastPacketAge: Double = 999.0,
+    val width: Int = 0, val height: Int = 0,
+) {
+    val trackCount get() = tracks.size / 8
     val modeName get() = if (trackCount > 0) (if ((0 until trackCount).any { tracks[it * 8 + 4] >= 2f }) "direct" else if ((0 until trackCount).any { tracks[it * 8 + 4] == 1f }) "RGB" else "mono")
                          else when (stats[RsCore.ST_MODE].toInt()) { 2 -> "direct"; 1 -> "RGB"; else -> "mono" }
 }
 
-/** Strobe calibration: band period on the scan axis -> sensor row time. */
-class LabResult(val axis: Int, val periodRows: Float, val strength: Float, val rowTimeUs: Double, val readoutMs: Double, val count: Int)
+/**
+ * Strobe calibration: band period on the scan axis -> row time of the rows it was measured on.
+ * `rowBin` is how many of those rows make one row of the image the receiver decodes: 1, except in
+ * RAW, where the calibration reads the sensor rows and the receiver a reduced image.
+ */
+class LabResult(val axis: Int, val periodRows: Float, val strength: Float, val rowTimeUs: Double, val readoutMs: Double, val count: Int, val rowBin: Int = 1)
 
 /**
- * Frame -> packed BGRA (columns /4) -> receiver (multi-source or single ROI) -> packets -> messages.
+ * Frame -> packed BGRA (about 480 columns) -> receiver (multi-source or single ROI) -> packets -> messages.
  * Runs on the camera thread. The BGRA buffer is also what the recorder stores and the remote
  * `frame` command returns, so a frame is converted once.
  */
@@ -53,21 +64,35 @@ class Pipeline(val recorder: Recorder) {
     private var lastUi = 0L
     private var lastPacketMs = 0L
     private var totalPackets = 0; private var totalMessages = 0
-    private var lastTrackCount = 0; private var lastTracks = FloatArray(0)
-    val snapshot = Snapshot()
+    @Volatile private var lastTracks = FloatArray(0)   // replaced whole, never written in place: a snapshot keeps the one it was built with
+    /** The last published snapshot. */
+    @Volatile var snapshot = Snapshot(); private set
+    /** Held while a live frame is processed (see awaitIdle). */
+    private val frameLock = Any()
 
-    fun reset() { RsCore.reset(); totalPackets = 0; totalMessages = 0; lastTracks = FloatArray(0); lastTrackCount = 0 }
+    fun reset() { RsCore.reset(); totalPackets = 0; totalMessages = 0; lastTracks = FloatArray(0) }
 
     /** RAW_SENSOR Bayer parameters of the current camera (set by the session). */
     @Volatile var rawCfa = 1; @Volatile var rawBlack = 64; @Volatile var rawWhite = 1023
 
     fun process(img: Image, tNs: Long) {
         if (paused) return
+        synchronized(frameLock) { if (!paused) processFrame(img, tNs) }
+    }
+
+    /**
+     * Returns when no live frame is being processed. Called with `paused` already set, so none starts
+     * afterwards: the replay thread waits here before it takes the receiver, otherwise the frame in
+     * flight would decode into the replay's receiver state and deliver the replay's first messages as live ones.
+     */
+    fun awaitIdle() { synchronized(frameLock) { } }
+
+    private fun processFrame(img: Image, tNs: Long) {
         val raw = img.format == android.graphics.ImageFormat.RAW_SENSOR
         if (raw && labMode) { processRaw(img, tNs); return }            // strobe calibration on the full-resolution mosaic
-        // RAW frames become a half-resolution BGRA image (one pixel per 2x2 Bayer block) and take the
-        // same path as YUV: segmentation keeps the lights apart, the multi-source receiver tracks them
-        val w = if (raw) img.width / 2 else img.width; val h = if (raw) img.height / 4 else img.height   // RAW: one pixel per 4x4 sensor pixels
+        // RAW frames become a reduced BGRA image (one pixel from a 2x2 Bayer block per RAW_ROW_BIN sensor rows,
+        // nominally 4x4) and take the same path as YUV: segmentation keeps the lights apart, the multi-source receiver tracks them
+        val w = if (raw) img.width / 2 else img.width; val h = if (raw) img.height / RAW_ROW_BIN else img.height
         val step = maxOf(1, w / 480)                 // 1080p -> /4, 4K -> /8, RAW 2000 blocks -> /4: always ~480 columns
         val ow = w / step
         val need = ow * h * 4
@@ -75,7 +100,7 @@ class Pipeline(val recorder: Recorder) {
         val buf = bgra!!
         val tConv0 = System.nanoTime()
         val outW = if (raw) {
-            val p = img.planes[0]; RsCore.convertRawToBgra(p.buffer, p.rowStride, img.width, img.height, rawCfa, rawBlack, rawWhite, step, buf)
+            val p = img.planes[0]; RsCore.convertRawToBgra(p.buffer, p.rowStride, img.width, img.height, rawCfa, rawBlack, rawWhite, step, RAW_ROW_BIN, buf)
         } else if (img.format == android.graphics.PixelFormat.RGBA_8888) {
             val p = img.planes[0]; RsCore.convertRgbaToBgra(p.buffer, p.rowStride, p.pixelStride, w, h, step, buf)
         } else {
@@ -111,15 +136,17 @@ class Pipeline(val recorder: Recorder) {
         if (multiSource) {
             val tc = RsCore.processFrameBgraMulti(buf, bw, bh, t, trackBuf, pktBuf)
             if (tc > 0) {
-                lastTrackCount = tc; lastTracks = trackBuf.copyOf(tc * 8)
-                if (frames % 3 == 0) RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, null)   // stats/profile for the UI: a full second decode, so one frame in three
+                lastTracks = trackBuf.copyOf(minOf(tc * 8, trackBuf.size))
+                // stats/profile for the UI, one frame in three. Only the profile is computed: the tracks' receivers own the
+                // decoding (a single-ROI decode of the same frame here assembled every message a second time, without a source)
+                if (frames % 3 == 0) RsCore.profileBgra(buf, bw, bh, axis, stats, profile)
                 n = pktBuf[0]
             } else {
-                lastTrackCount = 0; lastTracks = FloatArray(0)
+                lastTracks = FloatArray(0)
                 n = RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, packets)
             }
         } else {
-            lastTrackCount = 0; lastTracks = FloatArray(0)
+            lastTracks = FloatArray(0)
             n = RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, packets)
         }
         tDecMs += (System.nanoTime() - tDec0) / 1e6
@@ -131,14 +158,19 @@ class Pipeline(val recorder: Recorder) {
             tConvMs = 0.0; tDecMs = 0.0
             fps = frames; frames = 0; pps = pktCount * 1000f / max(1L, now - lastFpsT); pktCount = 0; lastFpsT = now
         }
+        val got = deliverMessages()
+        if (got || n > 0 || now - lastUi > 100) { lastUi = now; publish(n, now, w, h) }
+    }
+
+    /** Hand every complete message to `onMessage`; true when there was at least one. */
+    private fun deliverMessages(): Boolean {
         var got = false
         while (true) {
             val m = RsCore.pollMessage() ?: break
-            val parts = m.split("|")
             totalMessages++; got = true
-            onMessage?.invoke(parts[0].toIntOrNull() ?: 0, parts[1].toIntOrNull() ?: 7, parts.getOrElse(2) { "" }, parts.getOrNull(3)?.toIntOrNull() ?: 0)
+            onMessage?.invoke(m.slot, m.level, m.text, m.source)
         }
-        if (got || n > 0 || now - lastUi > 100) { lastUi = now; publish(n, now, w, h) }
+        return got
     }
 
     /** RAW path: profiles straight from the mosaic, single receiver (no segmentation / markers). */
@@ -146,7 +178,7 @@ class Pipeline(val recorder: Recorder) {
         val w = img.width; val h = img.height; val p = img.planes[0]
         if (t0 < 0) t0 = tNs
         val t = ((tNs - t0) / 1e9).toFloat()
-        lastTrackCount = 0; lastTracks = FloatArray(0)
+        lastTracks = FloatArray(0)
         val n = RsCore.processFrameRaw(p.buffer, p.rowStride, w, h, rawCfa, rawBlack, rawWhite, t, stats, profile, if (labMode) null else packets)
         frameRequest?.let { fr ->
             frameRequest = null
@@ -159,36 +191,29 @@ class Pipeline(val recorder: Recorder) {
             val count = stats[RsCore.ST_COUNT].toInt()
             val (period, strength) = period(profile, count)
             val rowTime = if (period > 0) 1.0 / (strobeHz * period) else 0.0
-            if (now - lastUi > 150) { lastUi = now; onLab?.invoke(LabResult(axis, period, strength, rowTime * 1e6, rowTime * count * 1e3, count)); publish(0, now, w, h) }
+            // measured on sensor rows; the receiver decodes RAW frames from an image with one row per RAW_ROW_BIN of them
+            if (now - lastUi > 150) { lastUi = now; onLab?.invoke(LabResult(axis, period, strength, rowTime * 1e6, rowTime * count * 1e3, count, RAW_ROW_BIN)); publish(0, now, w, h) }
             return
         }
         frames++; pktCount += n; totalPackets += n
         if (n > 0) lastPacketMs = now
         if (now - lastFpsT >= 1000) { fps = frames; frames = 0; pps = pktCount * 1000f / max(1L, now - lastFpsT); pktCount = 0; lastFpsT = now }
-        var got = false
-        while (true) {
-            val m = RsCore.pollMessage() ?: break
-            val parts = m.split("|"); totalMessages++; got = true
-            onMessage?.invoke(parts[0].toIntOrNull() ?: 0, parts[1].toIntOrNull() ?: 7, parts.getOrElse(2) { "" }, parts.getOrNull(3)?.toIntOrNull() ?: 0)
-        }
+        val got = deliverMessages()
         if (got || n > 0 || now - lastUi > 100) { lastUi = now; publish(n, now, w, h) }
     }
 
     private fun publish(n: Int, now: Long, w: Int, h: Int) {
-        val s = snapshot
-        s.fps = fps; s.packetsPerSec = pps
-        System.arraycopy(stats, 0, s.stats, 0, 15)
-        s.profile = downsample(profile, stats[RsCore.ST_COUNT].toInt(), 320)
-        s.packets = packets.copyOf(); s.packetCount = n
-        s.tracks = lastTracks; s.trackCount = lastTrackCount
-        s.totalPackets = totalPackets; s.totalMessages = totalMessages
-        s.lastPacketAge = if (lastPacketMs > 0) (now - lastPacketMs) / 1000.0 else 999.0
-        s.width = w; s.height = h
+        val s = Snapshot(fps, pps, stats.copyOf(), downsample(profile, stats[RsCore.ST_COUNT].toInt(), 320), packets.copyOf(), n,
+            lastTracks, totalPackets, totalMessages, if (lastPacketMs > 0) (now - lastPacketMs) / 1000.0 else 999.0, w, h)
+        snapshot = s
         onSnapshot?.invoke(s)
     }
 
     companion object {
         const val STEP = 4          // column step at 1080p (see process: 4K uses 8); profiles are column averages, nothing is lost
+        /** Sensor rows per row of the BGRA image a RAW frame is reduced to (RsCore.convertRawToBgra): the one place that
+         *  sets it. The recorder header and the RAW row time (strobe calibration x this) follow from it. */
+        const val RAW_ROW_BIN = 4
         fun stepFor(width: Int) = maxOf(1, width / 480)
 
         fun downsample(p: FloatArray, n: Int, m: Int): FloatArray {

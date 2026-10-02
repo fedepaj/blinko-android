@@ -9,7 +9,8 @@ import java.nio.ByteOrder
 /**
  * Runs a .rsrec recording through the multi-source receiver, as core/tools/replay.py --multi does.
  * Only raw frames (codec 0) are supported: the iOS app writes raw by default; LZ4 ones are replayed on the Mac.
- * The live pipeline is paused meanwhile because the receiver state is shared.
+ * The live pipeline is paused meanwhile because the receiver state is shared: the receiver is reset
+ * before the first frame and again on every way out.
  */
 class ReplayEngine {
     @Volatile var running = false; private set
@@ -20,18 +21,25 @@ class ReplayEngine {
 
     fun cancel() { cancelled = true }
 
-    fun start(file: File) {
+    /** `prepare` runs on the replay thread before the receiver is touched: the owner waits there for the live frame in flight. */
+    fun start(file: File, prepare: () -> Unit = {}) {
         if (running) return
         running = true; cancelled = false
-        Thread({ try { run(file) } catch (e: Exception) { finish("replay failed: $e") } }, "blinko.replay").start()
+        Thread({
+            // The final reset is in `finally`: the early ways out (a compressed recording, a frame size that does not
+            // match, an I/O error) used to skip it and hand the live pipeline a receiver holding the replay's state.
+            val summary = try { prepare(); RsCore.reset(); run(file) } catch (e: Exception) { "replay failed: $e" } finally { RsCore.reset() }
+            finish(summary)
+        }, "blinko.replay").start()
     }
 
     private fun finish(summary: String) { running = false; Diag.log("[replay] $summary"); onDone?.invoke(summary) }
 
-    private fun run(file: File) {
+    /** Returns the summary line. */
+    private fun run(file: File): String =
         RandomAccessFile(file, "r").use { raf ->
             val magic = ByteArray(8); raf.readFully(magic)
-            if (String(magic) != "RSREC001") { finish("not an rsrec file"); return }
+            if (String(magic) != "RSREC001") return@use "not an rsrec file"
             val hl = readLE(raf, 4).int
             val hb = ByteArray(hl); raf.readFully(hb)
             val header = JSONObject(String(hb))
@@ -39,7 +47,6 @@ class ReplayEngine {
             var frames = 0; var packets = 0; var messages = 0; var t0 = 0.0; var ts = 0.0
             var buf: ByteBuffer? = null
             val tracks = FloatArray(8 * 8); val pk = IntArray(1)
-            RsCore.reset()
             val tag = ByteArray(4)
             while (!cancelled && raf.filePointer + 45 <= raf.length()) {
                 raf.readFully(tag)
@@ -47,8 +54,8 @@ class ReplayEngine {
                 val hdr = readLE(raf, 8 + 24 + 8 + 1)
                 ts = hdr.double; hdr.position(hdr.position() + 24)
                 val raw = hdr.int; val comp = hdr.int; val codec = hdr.get().toInt()
-                if (codec != 0) { finish("compressed recording (codec $codec): replay it on the computer"); return }
-                if (raw != w * h * 4) { finish("frame size mismatch"); return }
+                if (codec != 0) return@use "compressed recording (codec $codec): replay it on the computer"
+                if (raw != w * h * 4) return@use "frame size mismatch"
                 if (buf == null || buf.capacity() < raw) buf = ByteBuffer.allocateDirect(raw)
                 val b = buf!!; b.clear()
                 val chunk = ByteArray(raw); raf.readFully(chunk); b.put(chunk); b.flip()
@@ -57,18 +64,16 @@ class ReplayEngine {
                 if (tc > 0) packets += pk[0]
                 while (true) {
                     val m = RsCore.pollMessage() ?: break
-                    val p = m.split("|"); messages++
-                    onMessage?.invoke(p[0].toIntOrNull() ?: 0, p[1].toIntOrNull() ?: 7, p.getOrElse(2) { "" }, p.getOrNull(3)?.toIntOrNull() ?: 0)
+                    messages++
+                    onMessage?.invoke(m.slot, m.level, m.text, m.source)
                 }
                 frames++
                 if (frames % 30 == 0) onProgress?.invoke("replay ${file.name}: $frames frames, $packets packets, $messages messages")
                 if (comp != raw) raf.seek(raf.filePointer + (comp - raw))
             }
             val dur = ts - t0
-            RsCore.reset()
-            finish("${file.name}: $frames frames (${"%.1f".format(dur)} s), $packets packets, $messages messages" + if (cancelled) " (cancelled)" else "")
+            "${file.name}: $frames frames (${"%.1f".format(dur)} s), $packets packets, $messages messages" + if (cancelled) " (cancelled)" else ""
         }
-    }
 
     private fun readLE(raf: RandomAccessFile, n: Int): ByteBuffer {
         val a = ByteArray(n); raf.readFully(a)
