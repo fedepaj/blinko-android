@@ -42,6 +42,7 @@ class Pipeline(val recorder: Recorder) {
     private var bgra: ByteBuffer? = null
     private var bw = 0; private var bh = 0
     private val stats = FloatArray(15)
+    private var tConvMs = 0.0; private var tDecMs = 0.0   // per-second timing, logged
     private val profile = FloatArray(4096)
     private val packets = FloatArray(96 * 4)
     private val trackBuf = FloatArray(8 * 8)
@@ -66,12 +67,13 @@ class Pipeline(val recorder: Recorder) {
         if (raw && labMode) { processRaw(img, tNs); return }            // strobe calibration on the full-resolution mosaic
         // RAW frames become a half-resolution BGRA image (one pixel per 2x2 Bayer block) and take the
         // same path as YUV: segmentation keeps the lights apart, the multi-source receiver tracks them
-        val w = if (raw) img.width / 2 else img.width; val h = if (raw) img.height / 2 else img.height
+        val w = if (raw) img.width / 2 else img.width; val h = if (raw) img.height / 4 else img.height   // RAW: one pixel per 4x4 sensor pixels
         val step = maxOf(1, w / 480)                 // 1080p -> /4, 4K -> /8, RAW 2000 blocks -> /4: always ~480 columns
         val ow = w / step
         val need = ow * h * 4
         if (bgra == null || bgra!!.capacity() < need) { bgra = ByteBuffer.allocateDirect(need).order(ByteOrder.nativeOrder()); bw = ow; bh = h }
         val buf = bgra!!
+        val tConv0 = System.nanoTime()
         val outW = if (raw) {
             val p = img.planes[0]; RsCore.convertRawToBgra(p.buffer, p.rowStride, img.width, img.height, rawCfa, rawBlack, rawWhite, step, buf)
         } else if (img.format == android.graphics.PixelFormat.RGBA_8888) {
@@ -82,6 +84,7 @@ class Pipeline(val recorder: Recorder) {
         }
         if (outW <= 0) return
         bw = outW; bh = h
+        tConvMs += (System.nanoTime() - tConv0) / 1e6
         val tsAbs = tNs / 1e9
         if (t0 < 0) t0 = tNs
         val t = ((tNs - t0) / 1e9).toFloat()        // small numbers: float keeps ms precision for pilot timing
@@ -90,6 +93,7 @@ class Pipeline(val recorder: Recorder) {
         if (recorder.isRecording) recorder.append(buf, need, tsAbs)
 
         var n: Int
+        val tDec0 = System.nanoTime()
         if (labMode) {
             // strobe calibration: full-resolution luma profile, no decoding side effects worth keeping
             RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, null)
@@ -108,7 +112,7 @@ class Pipeline(val recorder: Recorder) {
             val tc = RsCore.processFrameBgraMulti(buf, bw, bh, t, trackBuf, pktBuf)
             if (tc > 0) {
                 lastTrackCount = tc; lastTracks = trackBuf.copyOf(tc * 8)
-                RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, null)   // stats/profile for the UI
+                if (frames % 3 == 0) RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, null)   // stats/profile for the UI: a full second decode, so one frame in three
                 n = pktBuf[0]
             } else {
                 lastTrackCount = 0; lastTracks = FloatArray(0)
@@ -118,10 +122,15 @@ class Pipeline(val recorder: Recorder) {
             lastTrackCount = 0; lastTracks = FloatArray(0)
             n = RsCore.processFrameBgra(buf, bw, bh, axis, t, stats, profile, packets)
         }
+        tDecMs += (System.nanoTime() - tDec0) / 1e6
         val now = System.currentTimeMillis()
         frames++; pktCount += n; totalPackets += n
         if (n > 0) lastPacketMs = now
-        if (now - lastFpsT >= 1000) { fps = frames; frames = 0; pps = pktCount * 1000f / max(1L, now - lastFpsT); pktCount = 0; lastFpsT = now }
+        if (now - lastFpsT >= 1000) {
+            Diag.log("[timing] ${frames} frames: convert ${"%.1f".format(tConvMs / frames)} ms, decode ${"%.1f".format(tDecMs / frames)} ms per frame (${bw}x${bh}, multi=$multiSource)")
+            tConvMs = 0.0; tDecMs = 0.0
+            fps = frames; frames = 0; pps = pktCount * 1000f / max(1L, now - lastFpsT); pktCount = 0; lastFpsT = now
+        }
         var got = false
         while (true) {
             val m = RsCore.pollMessage() ?: break

@@ -30,9 +30,9 @@ class Settings(ctx: Context) {
     var strobeHz = prefs.getFloat("strobeHz", 2000f).toDouble()
     /** Row time per resolution (µs) of the image the receiver sees, from the strobe calibration; the
      *  defaults are the S21 FE's (1080p 5.44, 4K 3.22; RAW 4000x3000 has 2.65 µs sensor rows and is
-     *  processed at half resolution, 5.3 µs per processed row). The row time changes with the readout
+     *  processed at one pixel per 4x4, 10.6 µs per processed row). The row time changes with the readout
      *  mode, so each resolution keeps its own. `rowUs` is the current one. */
-    private val rowUsDefaults = mapOf("1080p" to 5.44, "4K" to 3.22, "RAW" to 5.3)
+    private val rowUsDefaults = mapOf("1080p" to 5.44, "4K" to 3.22, "RAW" to 10.6)
     var rowUs: Double
         get() = prefs.getFloat("rowUs_$resolution", (rowUsDefaults[resolution] ?: 5.4).toFloat()).toDouble()
         set(v) { prefs.edit().putFloat("rowUs_$resolution", v.toFloat()).apply() }

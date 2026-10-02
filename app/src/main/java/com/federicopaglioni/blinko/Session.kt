@@ -118,7 +118,7 @@ class Session(private val ctx: Context) {
         if (isRecording) return false
         val c = camera.info
         val raw = settings.resolution == "RAW"                       // RAW frames are recorded as the half-resolution BGRA image the receiver sees
-        val pw = if (raw) c.width / 2 else c.width; val ph = if (raw) c.height / 2 else c.height
+        val pw = if (raw) c.width / 2 else c.width; val ph = if (raw) c.height / 4 else c.height
         val step = Pipeline.stepFor(pw)
         val header = JSONObject().put("width", pw / step).put("height", ph).put("columnStep", step).put("pixelFormat", "BGRA")
             .put("fps", c.fps).put("exposureUs", c.exposureUs).put("iso", c.iso).put("lensPosition", c.lensPosition)
