@@ -53,15 +53,15 @@ a Nano R4 one or two centimetres from the camera, RAW capture:
 
 | board setting | packets/s | 20-char message |
 |---|---|---|
-| T = 105–120 µs, rep 3 (also the death loop's setting) | 20–50 | 1–2 s |
-| T = 90 µs, rep 2 | 15–20 | 2–3 s |
+| T = 105 µs, rep 3 | about 40 distinct | 1–2 s |
+| T = 105 µs, rep 1 | about 22 distinct | 2–3 s |
 | T = 60 µs (the default), rep 1 | 0 | never: the exposure is three chips |
 
 Limits: the exposure fixes T (57 µs needs T ≥ 90 µs); at 30 fps the sensor's
 readout shows about 8 ms of every 33 ms, so a 7–10 ms packet rarely fits a
 frame and repetition (`rep 3`) is what makes it decode; YUV capture hides the
-LED's saturation behind the ISP, use RAW. The receiver costs about 30 ms per
-frame on this phone (conversion 6 ms, decode 23 ms) and keeps 25–31 fps; the
+LED's saturation behind the ISP, use RAW. The receiver costs about 14 ms per
+frame on this phone (conversion 7 ms, decode 6–7 ms) and keeps 30 fps; the
 governor runs the big cores slowly under this load, so the frame rate swings.
 A 20-character message therefore takes one to two seconds, a fault reason
 after a crash about two.
